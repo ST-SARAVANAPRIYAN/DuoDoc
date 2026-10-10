@@ -1,0 +1,68 @@
+# Python Virtual Environments & Packages
+.venv/
+venv/
+ENV/
+env/
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Testing & Caches
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+
+# Node & Frontend
+node_modules/
+frontend/node_modules/
+frontend/dist/
+dist/
+.npm
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Environment & Credentials
+.env
+.env.local
+
+# Backups & Temporary Data
+backup/
+*.bak
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+__MACOSX/
+._*
+
+# User Uploads & Temporary Renders (keep directory structure via .gitkeep)
+uploads/*
+!uploads/.gitkeep
+!uploads/renders/.gitkeep
+data/renders/*
+!data/renders/.gitkeep
+
+# Checkpoint model weights (keep configs and README)
+checkpoints/*.pt
+checkpoints/*.bin
+checkpoints/*.safetensors
