@@ -79,6 +79,16 @@ def get_system_status() -> Dict[str, Any]:
             "vlm": {
                 "model_identifier": VLM_MODEL_PATH,
                 "is_local_path": os.path.exists(VLM_MODEL_PATH)
+            },
+            "qwopus": {
+                "model_available": any(
+                    os.path.exists(p) for p in [
+                        "models/qwopus/Qwopus3.5-9B-v3.Q4_K_M.gguf",
+                        os.path.expanduser("~/Qwopus3.5-9B-v3.Q4_K_M.gguf"),
+                        os.path.expanduser("~/Downloads/Qwopus3.5-9B-v3.Q4_K_M.gguf")
+                    ]
+                ),
+                "server_port": 8085
             }
         }
     }

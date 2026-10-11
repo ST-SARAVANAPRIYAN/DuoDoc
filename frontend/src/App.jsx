@@ -8,7 +8,7 @@ import { fetchSystemStatus } from './api/client';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('understanding');
-  const [activeEngine, setActiveEngine] = useState('dual-layer-vlm');
+  const [activeEngine, setActiveEngine] = useState('qwopus-9b');
   const [systemStatus, setSystemStatus] = useState(null);
   const [isStatusModalOpen, setIsStatusModalOpen] = useState(false);
 

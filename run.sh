@@ -17,6 +17,12 @@ cleanup() {
     echo " Shutting down IntelliDoc servers..."
     echo "======================================================================"
 
+    if [ -n "$QWOPUS_PID" ] && kill -0 "$QWOPUS_PID" 2>/dev/null; then
+        echo " Stopping Qwopus llama-server (PID: $QWOPUS_PID)..."
+        pkill -P "$QWOPUS_PID" 2>/dev/null || true
+        kill -TERM "$QWOPUS_PID" 2>/dev/null || true
+    fi
+
     if [ -n "$FRONTEND_PID" ] && kill -0 "$FRONTEND_PID" 2>/dev/null; then
         echo " Stopping React frontend (PID: $FRONTEND_PID)..."
         pkill -P "$FRONTEND_PID" 2>/dev/null || true
@@ -32,17 +38,38 @@ cleanup() {
     # Small grace wait
     wait "$BACKEND_PID" 2>/dev/null || true
     wait "$FRONTEND_PID" 2>/dev/null || true
+    wait "$QWOPUS_PID" 2>/dev/null || true
 
-    echo " All services stopped cleanly. Ports 8000 & 5173 released."
+    echo " All services stopped cleanly. Ports 8000, 5173 & 8085 released."
     echo "======================================================================"
     exit 0
 }
 
 trap cleanup SIGINT SIGTERM EXIT
 
+# 0. Launch Qwopus llama-server on port 8085 as default intelligence backend
+START_QWOPUS=true
+for arg in "$@"; do
+    if [ "$arg" = "--no-qwopus" ]; then
+        START_QWOPUS=false
+    fi
+done
+
+if [ "$START_QWOPUS" = "true" ]; then
+    if [ -f "models/qwopus/Qwopus3.5-9B-v3.Q4_K_M.gguf" ] || [ -f "$HOME/Qwopus3.5-9B-v3.Q4_K_M.gguf" ] || [ -f "$HOME/Downloads/Qwopus3.5-9B-v3.Q4_K_M.gguf" ]; then
+        echo "  [DEFAULT] Launching Qwopus3.5-9B-v3 llama-server on port 8085..."
+        "$DIR/scripts/start_qwopus_server.sh" &
+        QWOPUS_PID=$!
+    else
+        echo "  [NOTICE] Qwopus GGUF model not found in standard paths. Running backend in standard mode."
+    fi
+else
+    echo "  [INFO] --no-qwopus flag detected. Qwopus server deferred."
+fi
+
 # 1. Start FastAPI Backend in background
 export PYTHONPATH="$DIR/src:$DIR/backend:$PYTHONPATH"
-"$DIR/.venv/bin/python" -m uvicorn backend.app:app --host 0.0.0.0 --port 8000 &
+"$DIR/.venv/bin/python" -m uvicorn backend.app:app --host 0.0.0.0 --port 8000 --reload --reload-dir "$DIR/backend" --reload-dir "$DIR/src" &
 BACKEND_PID=$!
 
 # 2. Start React Frontend (Vite) in background

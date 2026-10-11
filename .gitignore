@@ -66,3 +66,6 @@ data/renders/*
 checkpoints/*.pt
 checkpoints/*.bin
 checkpoints/*.safetensors
+
+# Temporary scratch scripts
+scratch/

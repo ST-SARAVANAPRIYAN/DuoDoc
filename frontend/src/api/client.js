@@ -38,7 +38,14 @@ export async function fetchBenchmarkSamples() {
   return res.json();
 }
 
-export async function runQA({ documentId, pageIdx = 0, query, engine = 'dual-layer-vlm' }) {
+export async function runQA({
+  documentId,
+  pageIdx = 0,
+  query,
+  engine = 'qwopus-9b',
+  scopeMode = 'whole_doc',
+  regionBbox = null,
+}) {
   const res = await fetch(`${API_BASE}/intelligence/qa`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -47,6 +54,8 @@ export async function runQA({ documentId, pageIdx = 0, query, engine = 'dual-lay
       page_idx: pageIdx,
       query,
       engine,
+      scope_mode: scopeMode,
+      region_bbox: regionBbox,
     }),
   });
 
@@ -57,7 +66,86 @@ export async function runQA({ documentId, pageIdx = 0, query, engine = 'dual-lay
   return res.json();
 }
 
-export async function runManipulation({ documentId, pageIdx = 0, instruction, engine = 'dual-layer-vlm' }) {
+export async function streamQA({
+  documentId,
+  pageIdx = 0,
+  query,
+  engine = 'qwopus-9b',
+  scopeMode = 'whole_doc',
+  regionBbox = null,
+  abortSignal,
+  onThoughtDelta,
+  onAnswerDelta,
+  onDone,
+  onError,
+}) {
+  try {
+    const res = await fetch(`${API_BASE}/intelligence/qa/stream`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        document_id: documentId,
+        page_idx: pageIdx,
+        query,
+        engine,
+        scope_mode: scopeMode,
+        region_bbox: regionBbox,
+      }),
+      signal: abortSignal,
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || 'Streaming QA request failed');
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed.startsWith('data: ')) continue;
+        const dataStr = trimmed.slice(6).trim();
+        if (dataStr === '[DONE]') continue;
+
+        try {
+          const payload = JSON.parse(dataStr);
+          if (payload.type === 'thought_delta') {
+            if (onThoughtDelta) onThoughtDelta(payload.delta);
+          } else if (payload.type === 'answer_delta') {
+            if (onAnswerDelta) onAnswerDelta(payload.delta);
+          } else if (payload.type === 'done') {
+            if (onDone) onDone(payload.result);
+          } else if (payload.type === 'error') {
+            throw new Error(payload.error);
+          }
+        } catch (e) {
+          if (e.message && e.message.includes('server is not active')) {
+            throw e;
+          }
+          console.debug('SSE chunk parse info:', e);
+        }
+      }
+    }
+  } catch (err) {
+    if (err.name === 'AbortError' || abortSignal?.aborted) {
+      console.log('QA stream generation aborted by user.');
+      return;
+    }
+    if (onError) onError(err);
+    else throw err;
+  }
+}
+
+export async function runManipulation({ documentId, pageIdx = 0, instruction, engine = 'qwopus-9b' }) {
   const res = await fetch(`${API_BASE}/intelligence/manipulate`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

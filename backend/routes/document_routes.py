@@ -8,7 +8,8 @@ import json
 import logging
 from pathlib import Path
 from typing import List, Dict, Any
-from fastapi import APIRouter, UploadFile, File, HTTPException
+from io import BytesIO
+from fastapi import APIRouter, UploadFile, File, HTTPException, Response
 from PIL import Image
 
 from config import UPLOAD_DIR, RENDERS_DIR, FUNSD_DIR, CORPUS_DIR, BASE_DIR
@@ -131,6 +132,66 @@ def get_document_by_id(doc_id: str):
     )
 
 
+@router.get("/{doc_id}/crop")
+def get_document_crop(
+    doc_id: str,
+    page_idx: int = 0,
+    bbox: str = "",
+    padding: int = 15
+):
+    """
+    Returns high-resolution visual crop patch of a document element or region.
+    Coordinates bbox format: 'x1,y1,x2,y2' in points.
+    """
+    doc = get_document(doc_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    if page_idx >= len(doc.pages):
+        raise HTTPException(status_code=400, detail="Page index out of range")
+
+    page = doc.pages[page_idx]
+    if not page.image_path or not os.path.exists(page.image_path):
+        img_pil = render_canvas(doc, page_id=page_idx)
+    else:
+        img_pil = Image.open(page.image_path).convert("RGB")
+
+    if not bbox:
+        buf = BytesIO()
+        img_pil.save(buf, format="PNG")
+        return Response(content=buf.getvalue(), media_type="image/png")
+
+    try:
+        coords = [float(x.strip()) for x in bbox.split(",")]
+        if len(coords) != 4:
+            raise ValueError()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid bbox format. Expected 'x1,y1,x2,y2'")
+
+    x1, y1, x2, y2 = coords
+    doc_w = page.width or 800.0
+    doc_h = page.height or 1000.0
+    img_w, img_h = img_pil.size
+
+    scale_x = img_w / doc_w
+    scale_y = img_h / doc_h
+
+    min_x, max_x = min(x1, x2), max(x1, x2)
+    min_y, max_y = min(y1, y2), max(y1, y2)
+
+    px1 = max(0, int(min_x * scale_x) - padding)
+    py1 = max(0, int(min_y * scale_y) - padding)
+    px2 = min(img_w, int(max_x * scale_x) + padding)
+    py2 = min(img_h, int(max_y * scale_y) + padding)
+
+    if px2 <= px1 or py2 <= py1:
+        px1, py1, px2, py2 = 0, 0, min(img_w, 200), min(img_h, 100)
+
+    crop_img = img_pil.crop((px1, py1, px2, py2))
+    buf = BytesIO()
+    crop_img.save(buf, format="PNG")
+    return Response(content=buf.getvalue(), media_type="image/png")
+
+
 @router.get("/benchmarks/samples", response_model=List[BenchmarkSampleDTO])
 def get_benchmark_samples():
     """
@@ -138,6 +199,28 @@ def get_benchmark_samples():
     for instant browser testing without requiring manual file upload.
     """
     samples: List[BenchmarkSampleDTO] = []
+
+    # Check for featured multi-page academic document in uploads/
+    featured_path = UPLOAD_DIR / "doc_70c0156668_project_paper.docx"
+    if featured_path.exists():
+        try:
+            doc_id = "doc_70c0156668"
+            doc = get_document(doc_id)
+            if doc and len(doc.pages) > 0:
+                first_p = doc.pages[0]
+                first_img_url = f"/uploads/renders/{doc_id}/{os.path.basename(first_p.image_path)}" if first_p.image_path else ""
+                samples.append(BenchmarkSampleDTO(
+                    id=doc_id,
+                    label=f"Featured: IEEE Project Paper ({len(doc.pages)} Pages, Two-Column)",
+                    document_id=doc_id,
+                    instruction="What is the proposed system architecture and core methodology?",
+                    task_type="understanding",
+                    image_url=first_img_url,
+                    elements=[{"id": el.id, "text": el.text, "bbox": el.bbox} for el in first_p.elements[:25]]
+                ))
+        except Exception as e:
+            logger.warning(f"Could not load featured document: {e}")
+
     manifest_funsd = FUNSD_DIR / "funsd_val.json"
 
     if manifest_funsd.exists():

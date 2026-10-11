@@ -53,6 +53,7 @@ export default function Header({
             value={activeEngine}
             onChange={(e) => setActiveEngine(e.target.value)}
           >
+            <option value="qwopus-9b">Qwopus 3.5 9B (Claude Distilled)</option>
             <option value="dual-layer-vlm">Dual-Layer VLM (Qwen2-VL-2B)</option>
             <option value="custom-compact">Custom Compact Baseline (~3.9M)</option>
           </select>

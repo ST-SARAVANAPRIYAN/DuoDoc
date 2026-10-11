@@ -7,6 +7,7 @@ bounding boxes, typography, and crisp visual page rasterization (150 DPI) into t
 """
 
 import os
+import re
 import shutil
 import tempfile
 import subprocess
@@ -270,6 +271,51 @@ class DocxDocumentParser(BaseDocumentParser):
                     )
                     raw_elements.append(elem)
                     text_counter += 1
+
+                # 4. Extract embedded images from PyMuPDF
+                image_info_list = pdf_page.get_image_info(xrefs=True)
+                image_elements: List[DocumentElement] = []
+                for img_i, img_meta in enumerate(image_info_list):
+                    img_bbox = [float(c) for c in img_meta.get("bbox", [0, 0, 0, 0])]
+                    img_w = abs(img_bbox[2] - img_bbox[0])
+                    img_h = abs(img_bbox[3] - img_bbox[1])
+                    if img_w < 15.0 or img_h < 15.0:
+                        continue  # Skip tiny icon or bullet artifacts
+                    img_elem = DocumentElement(
+                        id=f"image_{p_idx}_{img_i}",
+                        type="image",
+                        page=p_idx,
+                        bbox=img_bbox,
+                        text="[Embedded Figure / Architecture Diagram]",
+                        style=ElementStyle()
+                    )
+                    image_elements.append(img_elem)
+
+                # 5. Link figure captions with adjacent image diagrams
+                for el in raw_elements:
+                    if el.type in ("paragraph", "heading"):
+                        cap_m = re.match(r"^\s*Fig(?:ure)?\.?\s*([0-9]+|[ivx]+|[a-z])", el.text, re.IGNORECASE)
+                        if cap_m:
+                            fig_n = cap_m.group(1).lower()
+                            el.metadata["figure_number"] = fig_n
+                            best_img_bbox = None
+                            min_dist = 999.0
+                            for im_el in image_elements:
+                                ib = im_el.bbox
+                                v_dist = min(abs(el.bbox[1] - ib[3]), abs(ib[1] - el.bbox[3]))
+                                if v_dist < min_dist and v_dist <= 50.0:
+                                    min_dist = v_dist
+                                    best_img_bbox = ib
+                            if best_img_bbox:
+                                el.metadata["associated_image_bbox"] = best_img_bbox
+                                el.metadata["composite_bbox"] = [
+                                    round(min(el.bbox[0], best_img_bbox[0]), 2),
+                                    round(min(el.bbox[1], best_img_bbox[1]), 2),
+                                    round(max(el.bbox[2], best_img_bbox[2]), 2),
+                                    round(max(el.bbox[3], best_img_bbox[3]), 2)
+                                ]
+
+                raw_elements.extend(image_elements)
 
                 pages.append(DocumentPage(
                     page_id=p_idx,

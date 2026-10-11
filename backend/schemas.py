@@ -34,7 +34,9 @@ class QARequest(BaseModel):
     document_id: str
     page_idx: int = 0
     query: str
-    engine: str = "dual-layer-vlm"  # "dual-layer-vlm" or "custom-compact"
+    engine: str = "qwopus-9b"  # "qwopus-9b", "dual-layer-vlm", or "custom-compact"
+    scope_mode: str = "whole_doc"  # "whole_doc" or "selected_region"
+    region_bbox: Optional[List[float]] = None  # [x1, y1, x2, y2] in pt
 
 
 class QAResponse(BaseModel):
@@ -49,13 +51,16 @@ class QAResponse(BaseModel):
     reasoning: str
     latency_ms: float
     engine: str
+    scope_mode: str = "whole_doc"
+    citation_label: Optional[str] = None
+    interpretability: Optional[Dict[str, Any]] = None
 
 
 class ManipulateRequest(BaseModel):
     document_id: str
     page_idx: int = 0
     instruction: str
-    engine: str = "dual-layer-vlm"  # "dual-layer-vlm" or "custom-compact"
+    engine: str = "qwopus-9b"  # "qwopus-9b", "dual-layer-vlm", or "custom-compact"
 
 
 class ManipulateResponse(BaseModel):

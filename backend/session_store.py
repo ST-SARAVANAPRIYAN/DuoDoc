@@ -46,7 +46,39 @@ _INV_VAL_MAP = None
 
 
 def get_document(doc_id: str) -> Optional[UnifiedDocument]:
-    return DOCUMENTS.get(doc_id)
+    if doc_id in DOCUMENTS:
+        return DOCUMENTS[doc_id]
+
+    # Attempt restoration from uploads/ directory if previously ingested
+    try:
+        from config import UPLOAD_DIR, RENDERS_DIR
+        from parser import DocxDocumentParser
+        from render import render_canvas
+
+        matching_files = list(UPLOAD_DIR.glob(f"{doc_id}_*.docx"))
+        if not matching_files:
+            matching_files = list(UPLOAD_DIR.glob(f"*{doc_id}*.docx"))
+
+        if matching_files:
+            docx_path = matching_files[0]
+            doc_renders_dir = RENDERS_DIR / doc_id
+            os.makedirs(doc_renders_dir, exist_ok=True)
+            parser = DocxDocumentParser(render_dpi=150)
+            doc = parser.parse(str(docx_path), output_image_dir=str(doc_renders_dir))
+            for p_idx, page in enumerate(doc.pages):
+                if not page.image_path or not os.path.exists(page.image_path):
+                    img = render_canvas(doc, page_id=p_idx)
+                    img_path = doc_renders_dir / f"page_{p_idx}.png"
+                    img.save(img_path)
+                    page.image_path = str(img_path)
+            doc.document_id = doc_id
+            DOCUMENTS[doc_id] = doc
+            logger.info(f"Auto-restored document {doc_id} from {docx_path.name}")
+            return doc
+    except Exception as e:
+        logger.warning(f"Could not auto-restore document '{doc_id}': {e}")
+
+    return None
 
 
 def store_document(doc_id: str, doc: UnifiedDocument):
@@ -105,3 +137,10 @@ def get_custom_model_bundle():
     except Exception as e:
         logger.error(f"Failed to load custom model: {e}")
         return None, None, None, None
+
+
+def get_qwopus_client_instance():
+    """Returns singleton client instance for local Qwopus llama-server."""
+    from models.vlm_engine import get_qwopus_client
+    return get_qwopus_client()
+

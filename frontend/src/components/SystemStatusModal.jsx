@@ -76,6 +76,19 @@ export default function SystemStatusModal({ isOpen, onClose, systemStatus }) {
                   {chk?.vlm?.model_identifier}
                 </span>
               </div>
+
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <span>Qwopus 3.5 9B (GGUF):</span>
+                {chk?.qwopus?.model_available ? (
+                  <span style={{ color: '#10B981', display: 'flex', alignItems: 'center', gap: '0.3rem', fontWeight: 600 }}>
+                    <CheckCircle size={15} /> GGUF Ready (port {chk?.qwopus?.server_port})
+                  </span>
+                ) : (
+                  <span style={{ color: '#94A3B8', display: 'flex', alignItems: 'center', gap: '0.3rem', fontWeight: 600 }}>
+                    Not installed
+                  </span>
+                )}
+              </div>
             </div>
           </div>
 
