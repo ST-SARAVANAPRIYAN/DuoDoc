@@ -103,6 +103,8 @@ export async function streamQA({
     const decoder = new TextDecoder();
     let buffer = '';
 
+    let doneReceived = false;
+
     while (true) {
       const { value, done } = await reader.read();
       if (done) break;
@@ -116,24 +118,33 @@ export async function streamQA({
         const dataStr = trimmed.slice(6).trim();
         if (dataStr === '[DONE]') continue;
 
+        let payload;
         try {
-          const payload = JSON.parse(dataStr);
-          if (payload.type === 'thought_delta') {
-            if (onThoughtDelta) onThoughtDelta(payload.delta);
-          } else if (payload.type === 'answer_delta') {
-            if (onAnswerDelta) onAnswerDelta(payload.delta);
-          } else if (payload.type === 'done') {
-            if (onDone) onDone(payload.result);
-          } else if (payload.type === 'error') {
-            throw new Error(payload.error);
-          }
-        } catch (e) {
-          if (e.message && e.message.includes('server is not active')) {
-            throw e;
-          }
-          console.debug('SSE chunk parse info:', e);
+          payload = JSON.parse(dataStr);
+        } catch (parseErr) {
+          console.debug('SSE chunk parse info:', parseErr);
+          continue;
+        }
+
+        if (payload.type === 'thought_delta') {
+          if (onThoughtDelta) onThoughtDelta(payload.delta);
+        } else if (payload.type === 'tool_call') {
+          if (onThoughtDelta) onThoughtDelta(`\n> 🛠️ **Agent Action**: Calling tool \`${payload.tool}\` with \`${JSON.stringify(payload.args || {})}\`...\n`);
+        } else if (payload.type === 'tool_result') {
+          if (onThoughtDelta) onThoughtDelta(`> 📋 **Observation**: ${payload.summary || 'Retrieved results.'}\n\n`);
+        } else if (payload.type === 'answer_delta') {
+          if (onAnswerDelta) onAnswerDelta(payload.delta);
+        } else if (payload.type === 'done') {
+          doneReceived = true;
+          if (onDone) onDone(payload.result);
+        } else if (payload.type === 'error') {
+          throw new Error(payload.error || 'Server reported an error during streaming.');
         }
       }
+    }
+
+    if (!doneReceived && !abortSignal?.aborted) {
+      throw new Error('Streaming connection closed before response was completed.');
     }
   } catch (err) {
     if (err.name === 'AbortError' || abortSignal?.aborted) {

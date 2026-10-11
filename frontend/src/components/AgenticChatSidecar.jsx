@@ -215,16 +215,16 @@ export default function AgenticChatSidecar({
             <Sparkles size={14} className="agent-spark-icon" />
           </div>
           <div>
-            <div className="agent-name">Document Research Assistant</div>
+            <div className="agent-name">Autonomous Document Agent</div>
             <div className="agent-status-tag">
               <span className="clean-status-dot" />
               <span>
                 Ready &bull;{' '}
                 {activeEngine === 'qwopus-9b'
-                  ? 'Qwopus 3.5 9B (Claude Distilled)'
+                  ? 'Cognitive ReAct Agent (Qwopus 3.5 9B)'
                   : activeEngine === 'dual-layer-vlm'
-                  ? 'Dual-Layer VLM'
-                  : 'Compact Engine'}
+                  ? 'Dual-Layer VLM Agent'
+                  : 'Compact Baseline'}
               </span>
             </div>
           </div>
@@ -441,7 +441,25 @@ export default function AgenticChatSidecar({
                           <div className="thought-box-body">
                             {msg.thought?.reasoning ? (
                               <div className="thought-reasoning-stream">
-                                {msg.thought.reasoning}
+                                {msg.thought.reasoning.split('\n').map((line, idx) => {
+                                  if (line.includes('Agent Action:')) {
+                                    return (
+                                      <div key={idx} className="thought-agent-action-chip">
+                                        <span>🛠️</span>
+                                        <span>{line.replace(/^>\s*/, '').replace(/\*\*/g, '')}</span>
+                                      </div>
+                                    );
+                                  }
+                                  if (line.includes('Observation:')) {
+                                    return (
+                                      <div key={idx} className="thought-agent-obs-chip">
+                                        <span>📋</span>
+                                        <span>{line.replace(/^>\s*/, '').replace(/\*\*/g, '')}</span>
+                                      </div>
+                                    );
+                                  }
+                                  return line.trim() ? <div key={idx} className="thought-text-line">{line}</div> : null;
+                                })}
                                 {msg.thought?.isThinking && (
                                   <span className="thought-blinking-cursor">|</span>
                                 )}
@@ -450,11 +468,11 @@ export default function AgenticChatSidecar({
                               <div className="thought-loading-steps">
                                 <div className="thought-step-item active">
                                   <span className="step-pulsing-dot" />
-                                  <span>Scanning structural AST elements &amp; document canvas...</span>
+                                  <span>Autonomous Document Agent planning navigation...</span>
                                 </div>
                                 <div className="thought-step-item">
                                   <span className="step-pending-dot" />
-                                  <span>Qwopus 3.5 9B synthesizing multimodal diagram layout...</span>
+                                  <span>Executing cognitive tool calls &amp; multimodal inspection...</span>
                                 </div>
                               </div>
                             )}
@@ -485,7 +503,7 @@ export default function AgenticChatSidecar({
                         >
                           <div className="trigger-left">
                             <Layers size={13} className="trigger-icon" />
-                            <span className="trigger-title">Dual Representation &amp; Fusion Trace</span>
+                            <span className="trigger-title">Autonomous Agent Evidence &amp; Grounding Trace</span>
                           </div>
                           <div className="trigger-right">
                             {msg.interpretability.stage_3_multimodal_fusion?.joint_confidence && (
@@ -511,7 +529,7 @@ export default function AgenticChatSidecar({
                                 <div className="rep-card-header">
                                   <div className="header-badge-group">
                                     <Eye size={12} className="rep-card-icon" />
-                                    <span className="card-label">2. Visual Representation</span>
+                                    <span className="card-label">Visual Grounding Patch</span>
                                   </div>
                                   <span className="rep-page-badge">
                                     Page {msg.interpretability.stage_2_dual_representation?.visual?.page_number || 1}
@@ -561,7 +579,7 @@ export default function AgenticChatSidecar({
                                 <div className="rep-card-header">
                                   <div className="header-badge-group">
                                     <Code2 size={12} className="rep-card-icon" />
-                                    <span className="card-label">2. Structural AST Node</span>
+                                    <span className="card-label">Structural Evidence Node</span>
                                   </div>
                                   <span className="rep-node-badge">
                                     #{msg.interpretability.stage_2_dual_representation?.structural?.element_id}
@@ -603,7 +621,7 @@ export default function AgenticChatSidecar({
                               <div className="rep-card-header">
                                 <div className="header-badge-group">
                                   <Cpu size={12} className="rep-card-icon" />
-                                  <span className="card-label">3. Multimodal Attention &amp; Fusion Weights</span>
+                                  <span className="card-label">Multimodal Fusion &amp; Agent Confidence</span>
                                 </div>
                               </div>
 

@@ -875,6 +875,7 @@ def run_qa_streaming(req: QARequest):
     target_fig_num = fig_match.group(1).lower() if fig_match else None
 
     def event_stream():
+        nonlocal target_page_idx
         start_time = time.perf_counter()
         if req.engine == "qwopus-9b":
             qwopus = get_qwopus_client_instance()
@@ -882,14 +883,19 @@ def run_qa_streaming(req: QARequest):
                 yield f"data: {json.dumps({'type': 'error', 'error': 'Qwopus 3.5 9B server is not active on port 8085. Please start it with: ./scripts/start_qwopus_server.sh'})}\n\n"
                 return
 
-            generator = qwopus.stream_question(
-                image=vlm_img,
-                elements=candidate_elements,
-                question=query_text
+            from agent import DocumentAgentOrchestrator
+            orchestrator = DocumentAgentOrchestrator()
+
+            generator = orchestrator.stream_agent_execution(
+                doc=doc,
+                query=req.query,
+                target_page_idx=target_page_idx,
+                scope_mode=req.scope_mode,
+                region_bbox=req.region_bbox
             )
 
             for evt in generator:
-                if evt["type"] in ("thought_delta", "answer_delta"):
+                if evt["type"] in ("thought_delta", "answer_delta", "tool_call", "tool_result"):
                     yield f"data: {json.dumps(evt)}\n\n"
                 elif evt["type"] == "done":
                     qa_result = evt["result"]
@@ -900,18 +906,24 @@ def run_qa_streaming(req: QARequest):
                     reasoning = qa_result.get("reasoning", "")
                     grounded_bbox = qa_result.get("grounded_bbox")
 
+                    target_page_idx = qa_result.get("page_idx", target_page_idx)
+                    page = doc.pages[target_page_idx]
+
                     verified_el = None
                     if target_id:
-                        for el in candidate_elements:
+                        for el in page.elements:
                             if el.id == target_id:
-                                s_s, s_v, s_f, rat = score_element_dual_rep(el, target_page_idx, req.query)
-                                if s_f >= 0.50:
-                                    verified_el = el
+                                verified_el = el
                                 break
+                        if not verified_el:
+                            for el in candidate_elements:
+                                if el.id == target_id:
+                                    verified_el = el
+                                    break
                     if not verified_el:
                         best_el = None
                         best_f_score = -1.0
-                        for el in candidate_elements:
+                        for el in page.elements:
                             s_s, s_v, s_f, rat = score_element_dual_rep(el, target_page_idx, req.query)
                             if s_f > best_f_score:
                                 best_f_score = s_f

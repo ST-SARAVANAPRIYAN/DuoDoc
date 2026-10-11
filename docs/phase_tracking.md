@@ -28,6 +28,8 @@
 | **Phase 16** | Qwopus3.5-9B Claude-Distilled Multimodal Reasoning Engine | **COMPLETED** | 9B GGUF + mmproj Multimodal, 8K Context, Deep Step-by-Step Thinking Trace (19/19 Tests Passed) |
 | **Phase 20** | Top-K Dense Evidence Page Routing & Table Structure Clustering | **COMPLETED** | Cross-Page Relevancy, Table Caption & Contiguous Row Clustering, Visual Patch (19/19 Tests Passed) |
 | **Phase 21** | Repetition Penalty, Active Stream Cancellation & User-Aware Scroll | **COMPLETED** | Loop Truncation, AbortController Stop Option, Smooth Non-Resetting Scroll (19/19 Tests Passed) |
+| **Phase 22** | Section Hierarchy Clustering & Bounding Box Grounding Sync | **COMPLETED** | Inverted Ternary Fix, Heading-Body Clustering, Composite BBox (19/19 Tests Passed) |
+| **Phase 23** | Modular Autonomous Document Agent & Cognitive ReAct Architecture | **COMPLETED** | 25/25 Tests Passed, ReAct Tool Suite, SSE Stream, Grounding Chips & Modern Agentic UI |
 
 ---
 
@@ -796,6 +798,68 @@
   * `"explain about the conclusion"` $\to$ Clustered `['heading_3_4', 'paragraph_3_5']`, composite bbox `[42.55, 263.71, 572.75, 357.29]`, citation `Page 4, Section '6. Conclusion' (#heading_3_4)`.
   * `"what is the operational impact and roadmap"` $\to$ Clustered `['heading_3_2', 'paragraph_3_3']`, citation `Page 4, Section '5. Operational Impact and Roadmap' (#heading_3_2)`.
   * `"could you explain the metrics table"` $\to$ Clustered Table 1 data rows `['table_row_3_0_0', ..., 'table_row_3_0_4']`.
+
+---
+
+## Phase 23 Deliverables & Verification Log: Modular Autonomous Multimodal Document Agent Architecture (`src/agent/`)
+
+### 1. Extensible Agent & Tool Core Subsystem (`src/agent/`)
+* **Base Abstractions (`src/agent/base.py`):**
+  * `BaseDocumentTool`: Abstract base class enforcing tool name, description, JSON Schema parameter validation, and `execute(doc, **kwargs) -> ToolResult`.
+  * `ToolResult`: Standardized result dataclass containing `success: bool`, `output: Any`, `message: str`, and rich multimodal `metadata: Dict[str, Any]` (composite bboxes, crops, element IDs).
+* **Modular Tool Registry (`src/agent/registry.py`):**
+  * `DocumentToolRegistry`: Central registration authority and dispatcher. Exports tools to OpenAI/Qwen function-calling schemas (`get_all_schemas()`) and formats tool system prompts. Provides safe execution with exception isolation.
+* **Core "Human Reader" Tool Suite (`src/agent/tools/`):**
+  * `GetDocumentOutlineTool` (`outline_tool.py`): Scans the document across all pages to extract section headings, tables, and figures with page indices and element IDs.
+  * `SearchDocumentTool` (`search_tool.py`): Semantic & keyword Ctrl+F search across document AST tokens, ranking matches with layout hierarchy weighting.
+  * `ReadSectionTool` (`read_section_tool.py`): Resolves section headings by element ID or title keyword, gathering the heading and all contiguous body paragraphs, lists, and composite bounding box coordinates.
+  * `InspectVisualRegionTool` (`visual_inspector_tool.py`): Focused high-resolution visual cropping of any diagram, table, chart, or bounding box for multimodal VLM verification.
+  * `InspectTableTool` (`table_inspector_tool.py`): Stemming-aware tabular inspector that reconstructs structured markdown tables, headers, rows, and composite bounding boxes.
+
+### 2. Cognitive ReAct Orchestrator & Live SSE Streaming (`src/agent/orchestrator.py`)
+* **Multi-Step ReAct Loop:**
+  * Coordinates iterative reasoning: `Thought -> Action: tool_name(args) -> Observation -> Final Answer`.
+  * Replaces fragile Python pre-filtering heuristics with real autonomous cognitive navigation.
+* **Live SSE Protocol:**
+  * Yields Server-Sent Events for `thought_delta`, `tool_call`, `tool_result`, `answer_delta`, and final `done`.
+  * Connects directly to `backend/routes/intelligence_routes.py` for `/api/intelligence/qa/stream`.
+* **Frontend Visualization (`frontend/src/api/client.js`):**
+  * Real-time streaming renders agent action badges and observation summaries directly in the chat sidecar thought accordion.
+
+### 3. Verification & Quality Assurance
+* **Backend Streaming Bug Fix (`backend/routes/intelligence_routes.py`):**
+  * Fixed `UnboundLocalError: cannot access local variable 'target_page_idx'` inside `run_qa_streaming` by declaring `nonlocal target_page_idx` inside `event_stream()`, resolving closure variable shadowing.
+* **Frontend Modernization (`frontend/src/components/AgenticChatSidecar.jsx` & `frontend/src/index.css`):**
+  * Updated header title to **Autonomous Document Agent** with subtitle **Cognitive ReAct Agent (Qwopus 3.5 9B)**.
+  * Replaced static legacy loading indicators with dynamic agentic planning statuses:
+    * *"Autonomous Document Agent planning navigation..."*
+    * *"Executing cognitive tool calls & multimodal inspection..."*
+  * Formatted streaming tool calls into `.thought-agent-action-chip` (cyan badge with tool name & params) and observations into `.thought-agent-obs-chip` (emerald badge with results preview).
+  * Modernized grounding accordion labels:
+    * `Visual Grounding Patch` (high-resolution cropped visual evidence).
+    * `Structural Evidence Node` (grounded AST node typography & preview).
+    * `Multimodal Fusion & Agent Confidence` (multimodal joint confidence & layout scoring).
+* **Unit Test Suite:** **25/25 unit tests passed** (`.venv/bin/pytest tests/`) in 9.60s (including 6 new tests in `tests/test_agent.py`).
+* **Frontend Production Build:** Vite build succeeded with 0 errors (`npm run build`).
+* **Image Normalization & Stream Lifecycle Fix (`src/models/vlm_engine.py`, `src/agent/orchestrator.py`, `frontend/src/api/client.js`):**
+  * Eliminated `AttributeError: 'DocumentPage' object has no attribute 'mode'` by introducing `_normalize_pil_image()` in `QwopusVLMClient` and `_get_page_image()` / `_get_focused_crop()` in `DocumentAgentOrchestrator`, ensuring all image inputs are safely converted to RGB PIL Images.
+  * Resolved the frontend infinite thinking loop (`Thinking... 41.6s`) by enforcing `doneReceived` verification and comprehensive error propagation in `streamQA` (`frontend/src/api/client.js`). If a stream disconnects prematurely or throws an error, the UI immediately terminates the timer and renders the error state.
+* **Scratchpad Monologue Leakage Fix (`src/models/vlm_engine.py`, `src/agent/orchestrator.py`):**
+  * Separated system instructions into distinct `role: "system"` messages, eliminating prompt-induced internal monologues (e.g. *"Double check word count constraint on internal thought..."*).
+  * Added live scratchpad diversion in `stream_question`: any untagged meta-commentary or planning steps (`1. Analyze the Input:`, `Drafting the Content:`) are diverted to `thought_delta` instead of `answer_delta`.
+  * Implemented `_clean_scratchpad_from_answer()` to strip residual planning lists, ensuring only clean, professional Markdown answers appear in the assistant response bubble.
+* **Real-World Multimodal Verification Benchmarks (Verified on `doc_226f295c1a_POM SSA 1.docx`):**
+  * **Benchmark 1 (Section Reasoning):** `"explain about the conclusion"`
+    * Autonomous Action: `read_section(section_title="Conclusion")`.
+    * Grounding Anchor: Resolved Section 6 (`#heading_3_4`) & `#paragraph_3_5` on Page 4 with composite bbox `[42.55, 263.71, 572.75, 357.29]` pt.
+    * Multimodal Synthesis: Extracted core themes of human-centric evolution, operational prowess + evolutionary leadership, and technology as a supportive compass. Zero scratchpad leakage.
+  * **Benchmark 2 (Visual Diagram & Flowchart Understanding):** `"can you locate the evolutionary leadership loop figure and explain about it"`
+    * Autonomous Action: `inspect_visual_region(page=2, element_id="image_1_0")`.
+    * Grounding Anchor: Embedded diagram `#image_1_0` on Page 2 with bbox `[42.5, 406.35, 531.35, 649.35]` pt, generating a 513×267 px focused visual raster crop.
+    * Multimodal VLM Extraction: Qwopus 3.5 9B visually read and explained all 4 cyclic stages directly from the diagram bitmap (*Employee Feedback* $\to$ *Analysis of Needs* $\to$ *Empowerment & Flexibility* $\to$ *Sustainable Outcomes*).
+
+
+
 
 
 

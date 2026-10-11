@@ -890,6 +890,26 @@ class QwopusVLMClient:
         except Exception:
             return False
 
+    @staticmethod
+    def _normalize_pil_image(image: Any) -> Image.Image:
+        """
+        Safely converts any input (PIL Image, DocumentPage, filepath, or None)
+        into an RGB PIL Image without raising AttributeError.
+        """
+        if isinstance(image, Image.Image):
+            return image.convert("RGB") if image.mode != "RGB" else image
+        if isinstance(image, str) and os.path.exists(image):
+            try:
+                return Image.open(image).convert("RGB")
+            except Exception:
+                pass
+        if hasattr(image, "image_path") and getattr(image, "image_path", None) and os.path.exists(image.image_path):
+            try:
+                return Image.open(image.image_path).convert("RGB")
+            except Exception:
+                pass
+        return Image.new("RGB", (200, 200), (255, 255, 255))
+
     def answer_question(
         self,
         image: Image.Image,
@@ -907,27 +927,24 @@ class QwopusVLMClient:
 
         structural_context = DualLayerVLMSystem.format_structural_elements(elements)
 
-        prompt = f"""You are the intelligence engine of a dual-representation document understanding system (Stage 5A: Extractive QA).
-You have access to:
-1. The focused visual section/page image.
-2. The top retrieved structural AST elements with exact coordinates [x1, y1, x2, y2], IDs, and text snippets:
+        system_prompt = (
+            "You are a professional Multimodal Document Understanding Engine (Stage 5A: Extractive QA).\n"
+            "Examine the visual image and the retrieved structural AST elements.\n"
+            "Provide a thorough, direct, well-structured answer in formatted Markdown (using bullet points and bold headers).\n"
+            "Do NOT output internal chain-of-thought, scratchpads, analysis steps, self-correction, or meta-commentary.\n"
+            "Start your answer directly with the requested information. At the very end of your response, specify the primary grounded AST element ID on its own line:\n"
+            "Grounded: [element_id]"
+        )
 
---- RETRIEVED STRUCTURAL AST ELEMENTS ---
-{structural_context}
------------------------------------------
+        user_content = (
+            f"--- RETRIEVED STRUCTURAL AST ELEMENTS ---\n"
+            f"{structural_context}\n"
+            f"-----------------------------------------\n\n"
+            f"User Question: \"{question}\""
+        )
 
-User Question: "{question}"
-
-Instructions:
-1. Examine the visual image and the retrieved structural AST elements.
-2. Keep your internal chain of thought extremely concise (under 60 words). Directly identify facts.
-3. Provide a thorough, well-structured answer in formatted Markdown (using bullet points and bold headers).
-4. At the very end of your response, specify the primary grounded AST element ID on its own line:
-Grounded: [element_id]"""
-
-        # Convert image to base64 JPEG
-        if image.mode != "RGB":
-            image = image.convert("RGB")
+        # Safely normalize image to RGB PIL Image
+        image = self._normalize_pil_image(image)
         buffered = BytesIO()
         image.save(buffered, format="JPEG", quality=90)
         img_b64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
@@ -935,6 +952,10 @@ Grounded: [element_id]"""
         payload = {
             "model": "qwopus",
             "messages": [
+                {
+                    "role": "system",
+                    "content": system_prompt
+                },
                 {
                     "role": "user",
                     "content": [
@@ -944,7 +965,7 @@ Grounded: [element_id]"""
                         },
                         {
                             "type": "text",
-                            "text": prompt
+                            "text": user_content
                         }
                     ]
                 }
@@ -1003,6 +1024,33 @@ Grounded: [element_id]"""
         }
 
     @staticmethod
+    def _clean_scratchpad_from_answer(text: str) -> str:
+        """
+        Removes any internal monologue, planning scratchpads, or self-correction commentary
+        from the final answer string.
+        """
+        if not text:
+            return ""
+
+        # 1. Match explicit final answer / response header transition
+        match = re.search(
+            r"(?:(?:\d+[\.\)]\s*)?\*{0,2}\s*(?:Constructing the Final Response|Final Response|Final Answer)\s*:?\s*\*{0,2}\s*\n+)(.*)",
+            text,
+            re.IGNORECASE | re.DOTALL
+        )
+        if match:
+            return match.group(1).strip()
+
+        # 2. If text starts with scratchpad analysis, find the first genuine markdown section heading
+        stripped = text.strip()
+        if stripped.lower().startswith("the user wants") or stripped.startswith("1."):
+            header_match = re.search(r"\n+(#{1,4}\s+[^\n]+|\*\*[A-Z][^\n]+\*\*)\n+", text)
+            if header_match:
+                return text[header_match.start():].strip()
+
+        return text
+
+    @staticmethod
     def _parse_answer_and_grounding(raw_answer: str, elements: List[DocumentElement]) -> Tuple[str, Optional[str]]:
         """
         Parses answer and grounded element ID from markdown, trailing Grounded tag, or JSON.
@@ -1042,6 +1090,7 @@ Grounded: [element_id]"""
                         final_answer = final_answer[:second_pos].strip()
                         break
 
+        final_answer = QwopusVLMClient._clean_scratchpad_from_answer(final_answer)
         return final_answer, target_id
 
     def stream_question(
@@ -1063,26 +1112,24 @@ Grounded: [element_id]"""
 
         structural_context = DualLayerVLMSystem.format_structural_elements(elements)
 
-        prompt = f"""You are the intelligence engine of a dual-representation document understanding system (Stage 5A: Extractive QA).
-You have access to:
-1. The focused visual section/page image.
-2. The top retrieved structural AST elements with exact coordinates [x1, y1, x2, y2], IDs, and text snippets:
+        system_prompt = (
+            "You are a professional Multimodal Document Understanding Engine (Stage 5A: Extractive QA).\n"
+            "Examine the visual image and the retrieved structural AST elements.\n"
+            "Provide a thorough, direct, well-structured answer in formatted Markdown (using bullet points and bold headers).\n"
+            "Do NOT output internal chain-of-thought, scratchpads, analysis steps, self-correction, or meta-commentary.\n"
+            "Start your answer directly with the requested information. At the very end of your response, specify the primary grounded AST element ID on its own line:\n"
+            "Grounded: [element_id]"
+        )
 
---- RETRIEVED STRUCTURAL AST ELEMENTS ---
-{structural_context}
------------------------------------------
+        user_content = (
+            f"--- RETRIEVED STRUCTURAL AST ELEMENTS ---\n"
+            f"{structural_context}\n"
+            f"-----------------------------------------\n\n"
+            f"User Question: \"{question}\""
+        )
 
-User Question: "{question}"
-
-Instructions:
-1. Examine the visual image and the retrieved structural AST elements.
-2. Keep your internal chain of thought extremely concise (under 60 words). State facts directly.
-3. Provide a thorough, well-structured answer in formatted Markdown (using bullet points and bold headers).
-4. At the very end of your response, specify the primary grounded AST element ID on its own line:
-Grounded: [element_id]"""
-
-        if image.mode != "RGB":
-            image = image.convert("RGB")
+        # Safely normalize image to RGB PIL Image
+        image = self._normalize_pil_image(image)
         buffered = BytesIO()
         image.save(buffered, format="JPEG", quality=90)
         img_b64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
@@ -1090,6 +1137,10 @@ Grounded: [element_id]"""
         payload = {
             "model": "qwopus",
             "messages": [
+                {
+                    "role": "system",
+                    "content": system_prompt
+                },
                 {
                     "role": "user",
                     "content": [
@@ -1099,7 +1150,7 @@ Grounded: [element_id]"""
                         },
                         {
                             "type": "text",
-                            "text": prompt
+                            "text": user_content
                         }
                     ]
                 }
@@ -1122,6 +1173,7 @@ Grounded: [element_id]"""
         accumulated_thought = []
         accumulated_answer = []
         inside_think_tag = False
+        inside_scratchpad = False
 
         with urllib.request.urlopen(req, timeout=180.0) as resp:
             for line in resp:
@@ -1178,8 +1230,30 @@ Grounded: [element_id]"""
                             accumulated_thought.append(c_token)
                             yield {"type": "thought_delta", "delta": c_token}
                         else:
-                            accumulated_answer.append(c_token)
-                            yield {"type": "answer_delta", "delta": c_token}
+                            # Detect and divert raw scratchpad monologue to thought stream
+                            joined_ans_so_far = "".join(accumulated_answer)
+                            if len(joined_ans_so_far) < 80 and not inside_scratchpad:
+                                cand_check = (joined_ans_so_far + c_token).strip().lower()
+                                if any(cand_check.startswith(p) for p in [
+                                    "the user wants", "1. analyze", "analyze the input", "determine the goal", "drafting"
+                                ]):
+                                    inside_scratchpad = True
+
+                            if inside_scratchpad:
+                                # Check for transition to genuine response
+                                tail_sample = ("".join(accumulated_thought[-5:]) + c_token)
+                                if any(m in tail_sample for m in [
+                                    "Constructing the Final Response:", "Final Response:", "Section Overview"
+                                ]) or c_token.startswith("\n#") or c_token.startswith("\n**"):
+                                    inside_scratchpad = False
+                                    accumulated_answer.append(c_token)
+                                    yield {"type": "answer_delta", "delta": c_token}
+                                else:
+                                    accumulated_thought.append(c_token)
+                                    yield {"type": "thought_delta", "delta": c_token}
+                            else:
+                                accumulated_answer.append(c_token)
+                                yield {"type": "answer_delta", "delta": c_token}
 
                             # Real-time termination guards
                             joined_ans = "".join(accumulated_answer)
