@@ -856,7 +856,43 @@
   * **Benchmark 2 (Visual Diagram & Flowchart Understanding):** `"can you locate the evolutionary leadership loop figure and explain about it"`
     * Autonomous Action: `inspect_visual_region(page=2, element_id="image_1_0")`.
     * Grounding Anchor: Embedded diagram `#image_1_0` on Page 2 with bbox `[42.5, 406.35, 531.35, 649.35]` pt, generating a 513×267 px focused visual raster crop.
-    * Multimodal VLM Extraction: Qwopus 3.5 9B visually read and explained all 4 cyclic stages directly from the diagram bitmap (*Employee Feedback* $\to$ *Analysis of Needs* $\to$ *Empowerment & Flexibility* $\to$ *Sustainable Outcomes*).
+
+### 4. Caption-Aware Figure Resolution, Multi-Turn Verification Guard & Step-by-Step Agentic IDE Feed
+* **Root Cause of IBM Logo Selection on Figure 5 Query:**
+  * In previous iterations, `_plan_cognitive_action` scored whole pages by raw token overlap (`base_overlap`). Because Page 1 of `SSA2-formatted.docx` contained title/abstract metadata with words like *"Explainability, feature importance"*, Page 1 had high token overlap. It selected `image_0_0` (IBM header logo on Page 1) instead of `image_4_0` (Figure 5 on Page 5), and the agent lacked a verification loop to detect and correct the mismatch.
+* **Caption-Aware Figure & Diagram Target Resolution (`src/agent/orchestrator.py`):**
+  * Implemented `_resolve_figure_target(doc, query)`:
+    * Parses numerical and alphanumeric figure identifiers via regex (`\b(?:fig|figure)\.?\s*([0-9]+|[ivx]+|[a-z])\b`).
+    * Identifies caption elements (`heading` or paragraph elements containing Figure tags and title keywords).
+    * Computes vertical proximity linking ($\le 85\text{ pt}$) to find the associated embedded visual image element.
+    * Dynamically calculates `composite_bbox: [min_x, min_y, max_x, max_y]` spanning both the graphic diagram and its caption.
+    * Explicitly filters out Page 1 header logos ($y < 150$, height $< 80$) unless the user specifically asks for "logo".
+* **Autonomous Multi-Turn Verification Guard & Corrective Re-Routing (`src/agent/orchestrator.py`):**
+  * In `stream_agent_execution`, Step 2.5 implements an autonomous verification audit:
+    * Validates whether the inspected page actually contains the requested figure number or if a header logo was mistakenly targeted.
+    * If a mismatch is detected, emits `⚠️ Verification Guard` thought delta and triggers a corrective navigation turn targeting the true figure across the document hierarchy.
+    * Padded bounding box overlap checking by 15pt ensures both diagram image elements and adjacent captions are passed in `relevant_elements` for multimodal synthesis.
+* **Preserve Explicit Bounding Boxes in `InspectVisualRegionTool` (`src/agent/tools/visual_inspector_tool.py`):**
+  * Updated `target_bbox` assignment so caller-provided composite bounding boxes are preserved and not overwritten by single-element unpadded bboxes.
+* **Step-by-Step Agentic IDE Execution Feed (`frontend/src/`):**
+  * Transformed the chat sidecar from a single generic accordion box into a modular **Step-by-Step Agentic IDE Execution Feed**:
+    * `frontend/src/api/client.js`: Added `onAgentStep` callback in `streamQA` for structured tool calls and execution results.
+    * `frontend/src/views/UnderstandingView.jsx`: Tracks `msg.agentSteps = []` with structured entries for planning, tool execution, verification, and synthesis.
+    * `frontend/src/components/AgenticChatSidecar.jsx`: Renders individual, sleek modern action cards:
+      * **Cognitive Planning Card:** Strategy statement with cyan accent and `Strategized` badge.
+      * **Tool Execution Card:** Tool badge (`inspect_visual_region`), parameter pills, live running spinner / green completion checkmark, and observation preview.
+      * **Verification Guard Card:** Re-routing warning and corrective target resolution.
+      * **Multimodal Synthesis Card:** Confirmation of visual raster + AST evidence synchronization.
+      * **Collapsible Raw Cognitive Log:** Clean dropdown allowing optional inspection of raw model monologues.
+    * `frontend/src/index.css`: Added styles for `.agent-step-feed`, `.step-card`, `.step-card-active`, `.tool-code`, `.arg-pill`, and `.step-card-obs`.
+* **Real Benchmark Verification on `uploads/doc_4d1210d155_927623BAD100_SSA2-formatted.docx`:**
+  * Query: `"could you explain the 'Figure 5: Feature Importance Attribution for Explainable Recommendations'"`
+  * Tool Invoked: `inspect_visual_region(page=5, element_id="image_4_0", bbox=[81.55, 168.6, 512.47, 415.77])`.
+  * Visual Inspection: Generated 455×271 px high-resolution crop of Figure 5 on Page 5.
+  * Multimodal Synthesis: Qwopus 3.5 9B accurately explained Figure 5's feature importance attribution, bar chart attributions, and explainable recommendations.
+* **Unit Test Suite & Build Verification:**
+  * **26/26 unit tests passed** in 7.03s (`.venv/bin/pytest tests/`), including new `test_figure_target_resolution`.
+  * **Vite build clean** with 0 errors (`npm run build`).
 
 
 

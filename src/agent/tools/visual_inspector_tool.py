@@ -70,7 +70,8 @@ class InspectVisualRegionTool(BaseDocumentTool):
             for el in page.elements:
                 if el.id == element_id:
                     target_el = el
-                    target_bbox = el.metadata.get("composite_bbox") or el.bbox
+                    if not target_bbox:
+                        target_bbox = el.metadata.get("composite_bbox") or el.bbox
                     break
 
         if not target_bbox:

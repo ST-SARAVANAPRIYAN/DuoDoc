@@ -157,6 +157,7 @@ export default function UnderstandingView({ activeEngine }) {
       status: 'thinking',
       scopeMode: currentPassage ? 'selected_region' : 'whole_doc',
       engine: activeEngine,
+      agentSteps: [],
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
     };
 
@@ -198,19 +199,103 @@ export default function UnderstandingView({ activeEngine }) {
         abortSignal: abortController.signal,
         onThoughtDelta: (delta) => {
           setMessages((prev) =>
-            prev.map((m) =>
-              m.id === assistantMsgId
-                ? {
-                    ...m,
-                    status: 'thinking',
-                    thought: {
-                      ...m.thought,
-                      reasoning: (m.thought?.reasoning || '') + delta,
-                      isThinking: true,
-                    },
-                  }
-                : m
-            )
+            prev.map((m) => {
+              if (m.id !== assistantMsgId) return m;
+              const steps = [...(m.agentSteps || [])];
+
+              if (delta.includes('Strategy:') || delta.includes('formulating navigation plan')) {
+                const stratMatch = delta.match(/Strategy:\s*([^\n]+)/);
+                const stratText = stratMatch ? stratMatch[1].trim() : 'Analyzing semantic query intent and document structure...';
+                if (!steps.some((s) => s.type === 'plan')) {
+                  steps.unshift({
+                    id: `plan_${Date.now()}`,
+                    type: 'plan',
+                    title: 'Formulating Navigation Plan',
+                    content: stratText,
+                    status: 'completed',
+                  });
+                }
+              }
+
+              if (delta.includes('Verification Guard:')) {
+                const guardText = delta.replace(/^[>\s\n*⚠️]+/, '').trim();
+                steps.push({
+                  id: `verify_${Date.now()}`,
+                  type: 'verification',
+                  title: 'Verification Guard & Re-routing',
+                  content: guardText,
+                  status: 'warning',
+                });
+              }
+
+              if (delta.includes('Evidence localized on') || delta.includes('Synthesizing verified multimodal answer')) {
+                if (!steps.some((s) => s.type === 'synthesis')) {
+                  steps.push({
+                    id: `synth_${Date.now()}`,
+                    type: 'synthesis',
+                    title: 'Multimodal Grounding & Evidence Fusion',
+                    content: 'Visual raster and structural AST elements synchronized for multimodal synthesis.',
+                    status: 'completed',
+                  });
+                }
+              }
+
+              return {
+                ...m,
+                status: 'thinking',
+                agentSteps: steps,
+                thought: {
+                  ...m.thought,
+                  reasoning: (m.thought?.reasoning || '') + delta,
+                  isThinking: true,
+                },
+              };
+            })
+          );
+        },
+        onAgentStep: (stepEvt) => {
+          setMessages((prev) =>
+            prev.map((m) => {
+              if (m.id !== assistantMsgId) return m;
+              const steps = [...(m.agentSteps || [])];
+
+              if (stepEvt.type === 'tool_call') {
+                steps.push({
+                  id: `tool_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
+                  type: 'tool',
+                  tool: stepEvt.tool,
+                  args: stepEvt.args || {},
+                  status: 'running',
+                  title: `Execute Cognitive Tool: ${stepEvt.tool}`,
+                });
+              } else if (stepEvt.type === 'tool_result') {
+                const lastToolIdx = [...steps].reverse().findIndex((s) => s.type === 'tool' && s.status === 'running');
+                if (lastToolIdx !== -1) {
+                  const actualIdx = steps.length - 1 - lastToolIdx;
+                  steps[actualIdx] = {
+                    ...steps[actualIdx],
+                    status: 'completed',
+                    summary: stepEvt.summary,
+                    output: stepEvt.output,
+                  };
+                } else {
+                  steps.push({
+                    id: `res_${Date.now()}`,
+                    type: 'tool',
+                    tool: stepEvt.tool,
+                    status: 'completed',
+                    summary: stepEvt.summary,
+                    output: stepEvt.output,
+                    title: `Executed: ${stepEvt.tool}`,
+                  });
+                }
+              }
+
+              return {
+                ...m,
+                agentSteps: steps,
+              };
+            })
           );
         },
         onAnswerDelta: (delta) => {

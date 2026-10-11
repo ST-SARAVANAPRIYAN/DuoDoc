@@ -75,6 +75,7 @@ export async function streamQA({
   regionBbox = null,
   abortSignal,
   onThoughtDelta,
+  onAgentStep,
   onAnswerDelta,
   onDone,
   onError,
@@ -129,9 +130,28 @@ export async function streamQA({
         if (payload.type === 'thought_delta') {
           if (onThoughtDelta) onThoughtDelta(payload.delta);
         } else if (payload.type === 'tool_call') {
-          if (onThoughtDelta) onThoughtDelta(`\n> 🛠️ **Agent Action**: Calling tool \`${payload.tool}\` with \`${JSON.stringify(payload.args || {})}\`...\n`);
+          if (onAgentStep) {
+            onAgentStep({
+              type: 'tool_call',
+              tool: payload.tool,
+              args: payload.args || {},
+            });
+          }
+          if (onThoughtDelta) {
+            onThoughtDelta(`\n> 🛠️ **Agent Action**: Calling tool \`${payload.tool}\` with \`${JSON.stringify(payload.args || {})}\`...\n`);
+          }
         } else if (payload.type === 'tool_result') {
-          if (onThoughtDelta) onThoughtDelta(`> 📋 **Observation**: ${payload.summary || 'Retrieved results.'}\n\n`);
+          if (onAgentStep) {
+            onAgentStep({
+              type: 'tool_result',
+              tool: payload.tool,
+              summary: payload.summary || '',
+              output: payload.output || '',
+            });
+          }
+          if (onThoughtDelta) {
+            onThoughtDelta(`> 📋 **Observation**: ${payload.summary || 'Retrieved results.'}\n\n`);
+          }
         } else if (payload.type === 'answer_delta') {
           if (onAnswerDelta) onAnswerDelta(payload.delta);
         } else if (payload.type === 'done') {

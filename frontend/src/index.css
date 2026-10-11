@@ -2546,3 +2546,242 @@ pre {
   border-left: 2px solid #0EA5E9;
   margin: 0;
 }
+
+/* ==========================================================================
+   Step-by-Step Agentic IDE Execution Feed
+   ========================================================================== */
+
+.agent-step-feed {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  margin-top: 0.4rem;
+}
+
+.step-card {
+  background: rgba(15, 23, 42, 0.7);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  padding: 0.5rem 0.65rem;
+  transition: all 180ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.step-card:hover {
+  border-color: rgba(255, 255, 255, 0.14);
+  background: rgba(15, 23, 42, 0.85);
+}
+
+.step-card-active {
+  border-color: rgba(245, 158, 11, 0.35);
+  box-shadow: 0 0 10px rgba(245, 158, 11, 0.08);
+}
+
+.step-card-plan {
+  border-left: 3px solid #0EA5E9;
+}
+
+.step-card-tool {
+  border-left: 3px solid #F59E0B;
+}
+
+.step-card-verify {
+  border-left: 3px solid #EA580C;
+  background: rgba(234, 88, 12, 0.07);
+}
+
+.step-card-synth {
+  border-left: 3px solid #10B981;
+}
+
+.step-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem;
+}
+
+.step-card-title {
+  display: flex;
+  align-items: center;
+  gap: 0.38rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: #F1F5F9;
+}
+
+.step-card-icon {
+  flex-shrink: 0;
+}
+
+.text-cyan {
+  color: #38BDF8;
+}
+
+.text-amber {
+  color: #F59E0B;
+}
+
+.text-orange {
+  color: #FB923C;
+}
+
+.text-emerald {
+  color: #34D399;
+}
+
+.tool-code {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  background: rgba(245, 158, 11, 0.12);
+  color: #FBBF24;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-weight: 600;
+}
+
+.step-card-badge {
+  font-size: 0.62rem;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.badge-plan {
+  background: rgba(56, 189, 248, 0.12);
+  color: #38BDF8;
+  border: 1px solid rgba(56, 189, 248, 0.25);
+}
+
+.badge-running {
+  background: rgba(245, 158, 11, 0.15);
+  color: #FBBF24;
+  border: 1px solid rgba(245, 158, 11, 0.3);
+}
+
+.badge-completed {
+  background: rgba(16, 185, 129, 0.15);
+  color: #34D399;
+  border: 1px solid rgba(16, 185, 129, 0.25);
+}
+
+.badge-verify {
+  background: rgba(234, 88, 12, 0.18);
+  color: #FB923C;
+  border: 1px solid rgba(234, 88, 12, 0.35);
+}
+
+.badge-synth {
+  background: rgba(16, 185, 129, 0.15);
+  color: #34D399;
+  border: 1px solid rgba(16, 185, 129, 0.25);
+}
+
+.step-spinner {
+  animation: spin 1s linear infinite;
+}
+
+.step-card-body {
+  font-size: 0.7rem;
+  color: #94A3B8;
+  margin-top: 0.3rem;
+  line-height: 1.45;
+}
+
+.step-card-args {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  margin-top: 0.35rem;
+}
+
+.arg-pill {
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  display: inline-flex;
+  align-items: center;
+}
+
+.arg-key {
+  color: #64748B;
+  margin-right: 3px;
+}
+
+.arg-val {
+  color: #E2E8F0;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.step-card-obs {
+  background: rgba(0, 0, 0, 0.35);
+  border-left: 2px solid #10B981;
+  padding: 0.35rem 0.55rem;
+  border-radius: 3px;
+  font-size: 0.68rem;
+  color: #CBD5E1;
+  margin-top: 0.4rem;
+  display: flex;
+  gap: 0.35rem;
+  align-items: baseline;
+}
+
+.obs-tag {
+  color: #34D399;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.obs-text {
+  color: #94A3B8;
+  font-style: italic;
+}
+
+.raw-stream-accordion {
+  margin-top: 0.55rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  padding-top: 0.4rem;
+}
+
+.raw-stream-toggle-btn {
+  background: none;
+  border: none;
+  color: #64748B;
+  font-size: 0.66rem;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.2rem 0.3rem;
+  border-radius: 3px;
+  transition: all 120ms ease;
+}
+
+.raw-stream-toggle-btn:hover {
+  color: #94A3B8;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.raw-stream-output {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  color: #94A3B8;
+  background: rgba(0, 0, 0, 0.45);
+  padding: 0.5rem 0.65rem;
+  border-radius: 4px;
+  margin-top: 0.35rem;
+  white-space: pre-wrap;
+  max-height: 150px;
+  overflow-y: auto;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}

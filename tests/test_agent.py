@@ -170,3 +170,70 @@ def test_orchestrator_initialization():
     assert orchestrator.registry.get_tool("read_section") is not None
     assert orchestrator.registry.get_tool("inspect_table") is not None
     assert orchestrator.registry.get_tool("inspect_visual_region") is not None
+
+
+def test_figure_target_resolution():
+    """Verifies that _resolve_figure_target discriminates captions and excludes header logos."""
+    # Page 1: Header logo + generic title text mentioning 'feature importance'
+    p1 = DocumentPage(
+        page_id=0,
+        width=612.0,
+        height=792.0,
+        elements=[
+            DocumentElement(
+                id="logo_0",
+                type="image",
+                page=0,
+                bbox=[50.0, 30.0, 150.0, 70.0],  # Header logo (top y < 150, h < 80)
+                text="[Embedded Figure / Architecture Diagram]"
+            ),
+            DocumentElement(
+                id="title_0",
+                type="heading",
+                page=0,
+                bbox=[50.0, 100.0, 500.0, 140.0],
+                text="Explainable Recommendations and Feature Importance in Modern Systems"
+            )
+        ]
+    )
+
+    # Page 2: True Figure 5 diagram + caption directly below
+    p2 = DocumentPage(
+        page_id=1,
+        width=612.0,
+        height=792.0,
+        elements=[
+            DocumentElement(
+                id="fig5_img",
+                type="image",
+                page=1,
+                bbox=[100.0, 150.0, 500.0, 350.0],
+                text="[Embedded Figure / Architecture Diagram]"
+            ),
+            DocumentElement(
+                id="fig5_caption",
+                type="heading",
+                page=1,
+                bbox=[100.0, 360.0, 500.0, 380.0],
+                text="Figure 5: Feature Importance Attribution for Explainable Recommendations"
+            )
+        ]
+    )
+
+    doc = UnifiedDocument(document_id="doc_fig_test", pages=[p1, p2])
+    orchestrator = DocumentAgentOrchestrator()
+
+    # Query for Figure 5
+    match = orchestrator._resolve_figure_target(doc, "could you explain the 'Figure 5: Feature Importance Attribution for Explainable Recommendations'")
+    assert match is not None
+    assert match["page"] == 2
+    assert match["image_id"] == "fig5_img"
+    assert match["caption_id"] == "fig5_caption"
+    assert match["composite_bbox"] == [100.0, 150.0, 500.0, 380.0]
+
+    # Cognitive plan should route directly to inspect_visual_region on Page 2
+    plan = orchestrator._plan_cognitive_action(doc, "explain Figure 5", target_page_hint=0)
+    assert plan["tool"] == "inspect_visual_region"
+    assert plan["args"]["page"] == 2
+    assert plan["args"]["element_id"] == "fig5_img"
+    assert plan["args"]["bbox"] == [100.0, 150.0, 500.0, 380.0]

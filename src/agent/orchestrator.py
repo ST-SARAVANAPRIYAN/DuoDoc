@@ -79,6 +79,103 @@ class DocumentAgentOrchestrator:
             return img_pil.crop((cx1, cy1, cx2, cy2))
         return img_pil
 
+    def _resolve_figure_target(self, doc: UnifiedDocument, query: str) -> Optional[Dict[str, Any]]:
+        """
+        Resolves the exact figure or diagram target using caption matching,
+        vertical proximity linking to embedded images, and header logo filtering.
+        """
+        q_lower = query.lower()
+        fig_num_match = re.search(r"\b(?:fig|figure)\.?\s*([0-9]+|[ivx]+|[a-z])\b", q_lower)
+        target_num = fig_num_match.group(1).lower() if fig_num_match else None
+
+        stop_words = {
+            "can", "you", "could", "explain", "about", "what", "the", "figure", "fig",
+            "diagram", "image", "for", "and", "show", "tell", "me", "short", "summarization",
+            "think", "it", "with", "from", "that", "this", "please", "describe"
+        }
+        q_words = [w for w in re.findall(r"\w+", q_lower) if w not in stop_words and len(w) > 2]
+
+        best_match = None
+        best_score = -1.0
+
+        for p_idx, page in enumerate(doc.pages):
+            page_num = p_idx + 1
+            for el in page.elements:
+                t_low = el.text.lower().strip()
+                if not t_low:
+                    continue
+
+                caption_score = 0.0
+                is_caption = False
+
+                if target_num:
+                    m = re.search(r"\b(?:fig|figure)\.?\s*([0-9]+|[ivx]+|[a-z])\b", t_low)
+                    if m and m.group(1).lower() == target_num:
+                        caption_score += 100.0
+                        is_caption = True
+
+                keyword_matches = sum(1 for w in q_words if w in t_low)
+                if keyword_matches > 0:
+                    caption_score += keyword_matches * 15.0
+                    if "fig" in t_low or el.type == "heading":
+                        is_caption = True
+
+                if is_caption or caption_score > 0:
+                    adjacent_img = None
+                    min_dist = 9999.0
+                    for img_el in page.elements:
+                        if img_el.type == "image":
+                            d_below = abs(el.bbox[1] - img_el.bbox[3])
+                            d_above = abs(img_el.bbox[1] - el.bbox[3])
+                            dist = min(d_below, d_above)
+                            if dist < min_dist and dist <= 85.0:
+                                min_dist = dist
+                                adjacent_img = img_el
+
+                    if adjacent_img:
+                        total_score = caption_score + 50.0 - (min_dist * 0.2)
+                        if total_score > best_score:
+                            best_score = total_score
+                            c_box = [
+                                round(min(adjacent_img.bbox[0], el.bbox[0]), 2),
+                                round(min(adjacent_img.bbox[1], el.bbox[1]), 2),
+                                round(max(adjacent_img.bbox[2], el.bbox[2]), 2),
+                                round(max(adjacent_img.bbox[3], el.bbox[3]), 2),
+                            ]
+                            best_match = {
+                                "page": page_num,
+                                "page_idx": p_idx,
+                                "image_id": adjacent_img.id,
+                                "caption_id": el.id,
+                                "caption_text": el.text.strip(),
+                                "composite_bbox": c_box,
+                                "score": total_score
+                            }
+
+        if not best_match:
+            for p_idx, page in enumerate(doc.pages):
+                for el in page.elements:
+                    if el.type == "image":
+                        # Skip page 1 header logo if asking for figures/diagrams unless logo is explicitly requested
+                        if p_idx == 0 and el.bbox[1] < 150 and (el.bbox[3] - el.bbox[1]) < 80 and "logo" not in q_lower:
+                            continue
+                        page_text = " ".join(e.text.lower() for e in page.elements)
+                        overlap = sum(1 for w in q_words if w in page_text)
+                        score = overlap * 5.0
+                        if score > best_score:
+                            best_score = score
+                            best_match = {
+                                "page": p_idx + 1,
+                                "page_idx": p_idx,
+                                "image_id": el.id,
+                                "caption_id": el.id,
+                                "caption_text": el.text.strip(),
+                                "composite_bbox": el.metadata.get("composite_bbox") or el.bbox,
+                                "score": score
+                            }
+
+        return best_match
+
     def _plan_cognitive_action(
         self,
         doc: UnifiedDocument,
@@ -112,36 +209,16 @@ class DocumentAgentOrchestrator:
 
         # Prioritize figure queries when visual figure or loop is requested
         if is_figure_query:
-            # Score each image element across all pages based on text proximity & semantic alignment
-            q_tokens = set(re.findall(r"\w+", q_lower))
-            best_img_el = None
-            best_img_page = target_page_hint + 1
-            best_img_score = -1.0
-
-            for p_idx, page in enumerate(doc.pages):
-                page_text = " ".join(el.text.lower() for el in page.elements)
-                base_overlap = sum(1 for tok in q_tokens if tok in page_text)
-
-                for el in page.elements:
-                    if el.type == "image":
-                        score = float(base_overlap)
-                        # Proximity bonus if adjacent page contains the heading or concept
-                        if p_idx + 1 < len(doc.pages):
-                            next_text = " ".join(e.text.lower() for e in doc.pages[p_idx + 1].elements)
-                            if any(w in next_text for w in ["leadership", "evolutionary", "model", "loop", "architecture"]):
-                                score += 5.0
-                        if "loop" in q_lower and ("leadership" in page_text or "apex" in page_text):
-                            score += 8.0
-                        if score > best_img_score:
-                            best_img_score = score
-                            best_img_el = el
-                            best_img_page = p_idx + 1
-
-            if best_img_el:
+            fig_target = self._resolve_figure_target(doc, query)
+            if fig_target:
                 return {
                     "tool": "inspect_visual_region",
-                    "args": {"page": best_img_page, "element_id": best_img_el.id},
-                    "rationale": f"Located embedded visual diagram '{best_img_el.id}' on Page {best_img_page}."
+                    "args": {
+                        "page": fig_target["page"],
+                        "element_id": fig_target["image_id"],
+                        "bbox": fig_target["composite_bbox"]
+                    },
+                    "rationale": f"Located '{fig_target.get('caption_text') or fig_target['image_id']}' on Page {fig_target['page']}."
                 }
             return {
                 "tool": "search_document",
@@ -282,6 +359,54 @@ class DocumentAgentOrchestrator:
             active_page_idx = first_match.get("page", target_page_idx + 1) - 1
             active_evidence_bbox = first_match.get("bbox")
 
+        # Step 2.5: Multi-Turn Verification Guard & Corrective Execution
+        is_figure_query = any(w in query.lower() for w in [
+            "figure", "fig", "diagram", "loop", "flowchart", "chart", "architecture", "model figure", "loop figure"
+        ])
+        fig_match = re.search(r"\b(?:fig|figure)\.?\s*([0-9]+|[ivx]+|[a-z])\b", query.lower())
+        target_fig_num = fig_match.group(1).lower() if fig_match else None
+
+        if is_figure_query and target_fig_num:
+            active_page = doc.pages[active_page_idx] if 0 <= active_page_idx < len(doc.pages) else doc.pages[0]
+            page_text = " ".join(e.text.lower() for e in active_page.elements)
+            has_fig_on_page = bool(re.search(rf"\b(?:fig|figure)\.?\s*{re.escape(target_fig_num)}\b", page_text))
+            is_header_logo = (active_page_idx == 0 and active_evidence_bbox and active_evidence_bbox[1] < 150 and (active_evidence_bbox[3] - active_evidence_bbox[1]) < 80)
+
+            if not has_fig_on_page or is_header_logo:
+                yield {
+                    "type": "thought_delta",
+                    "delta": f"\n⚠️ Verification Guard: Visual observation on Page {active_page_idx + 1} does not match requested 'Figure {target_fig_num}'. Initiating corrective resolution across document hierarchy...\n"
+                }
+                corr_target = self._resolve_figure_target(doc, query)
+                if corr_target and (corr_target["page_idx"] != active_page_idx or corr_target["image_id"] != active_grounded_id):
+                    corr_tool = "inspect_visual_region"
+                    corr_args = {
+                        "page": corr_target["page"],
+                        "element_id": corr_target["image_id"],
+                        "bbox": corr_target["composite_bbox"]
+                    }
+                    yield {
+                        "type": "tool_call",
+                        "tool": corr_tool,
+                        "args": corr_args
+                    }
+                    corr_res = self.registry.execute_tool(corr_tool, doc=doc, **corr_args)
+                    yield {
+                        "type": "tool_result",
+                        "tool": corr_tool,
+                        "summary": corr_res.message,
+                        "output": corr_res.output
+                    }
+                    active_page_idx = corr_target["page_idx"]
+                    active_grounded_id = corr_target["image_id"]
+                    active_evidence_bbox = corr_target["composite_bbox"]
+                    cropped_img = corr_res.metadata.get("cropped_image")
+                    tool_result = corr_res
+                    yield {
+                        "type": "thought_delta",
+                        "delta": f"✅ Corrective verification confirmed: Successfully localized 'Figure {target_fig_num}' on Page {corr_target['page']}.\n\n"
+                    }
+
         # Step 3: Focused Crop and Structural Context Extraction
         if not (0 <= active_page_idx < len(doc.pages)):
             active_page_idx = min(max(0, active_page_idx), len(doc.pages) - 1)
@@ -307,9 +432,9 @@ class DocumentAgentOrchestrator:
             relevant_elements = [el for el in page.elements if el.id in node_ids_set]
 
         if not relevant_elements and active_evidence_bbox:
-            # Elements overlapping or near the evidence bbox
+            # Elements overlapping or near the evidence bbox (padded by 15pt)
             for el in page.elements:
-                if not (el.bbox[3] < active_evidence_bbox[1] or el.bbox[1] > active_evidence_bbox[3]):
+                if not (el.bbox[3] < active_evidence_bbox[1] - 15 or el.bbox[1] > active_evidence_bbox[3] + 15):
                     relevant_elements.append(el)
 
         if not relevant_elements:

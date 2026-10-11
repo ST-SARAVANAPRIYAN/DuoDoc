@@ -19,7 +19,12 @@ import {
   Code2,
   Cpu,
   ExternalLink,
-  Square
+  Square,
+  Compass,
+  Wrench,
+  Terminal,
+  ShieldAlert,
+  Loader2,
 } from 'lucide-react';
 
 function formatInline(str) {
@@ -169,12 +174,18 @@ export default function AgenticChatSidecar({
     }
   }, [composerRef]);
 
+  const [showRawStream, setShowRawStream] = useState({});
+
   const toggleThought = (msgId) => {
     setExpandedThoughts((prev) => ({ ...prev, [msgId]: !prev[msgId] }));
   };
 
   const toggleTrace = (msgId) => {
     setExpandedTraces((prev) => ({ ...prev, [msgId]: !prev[msgId] }));
+  };
+
+  const toggleRawStream = (msgId) => {
+    setShowRawStream((prev) => ({ ...prev, [msgId]: !prev[msgId] }));
   };
 
   const handleCopyText = (text, id) => {
@@ -389,8 +400,11 @@ export default function AgenticChatSidecar({
                 {/* Assistant Message Bubble */}
                 {msg.role === 'assistant' && (
                   <div className="assistant-message-bubble">
-                    {/* Progressive Live Thinking Box */}
-                    {(msg.status === 'thinking' || msg.thought?.isThinking || msg.thought?.reasoning) && (
+                    {/* Step-by-Step Agentic IDE Execution Feed */}
+                    {((msg.agentSteps && msg.agentSteps.length > 0) ||
+                      msg.status === 'thinking' ||
+                      msg.thought?.isThinking ||
+                      msg.thought?.reasoning) && (
                       <div
                         className={`modern-thought-box ${
                           msg.thought?.isThinking ? 'thinking-active' : 'thinking-completed'
@@ -405,7 +419,7 @@ export default function AgenticChatSidecar({
                             {msg.thought?.isThinking ? (
                               <>
                                 <Sparkles size={13} className="thought-sparkle-pulse" />
-                                <span className="thought-status-text">Thinking...</span>
+                                <span className="thought-status-text">Autonomous Agent Executing...</span>
                                 <span className="thought-timer-pill">
                                   {msg.thought?.thoughtTime
                                     ? `${msg.thought.thoughtTime.toFixed(1)}s`
@@ -416,12 +430,15 @@ export default function AgenticChatSidecar({
                               <>
                                 <Check size={13} className="thought-check-icon" />
                                 <span className="thought-status-text">
-                                  Thought for{' '}
+                                  {msg.agentSteps && msg.agentSteps.length > 0
+                                    ? `Executed ${msg.agentSteps.length} Step${msg.agentSteps.length > 1 ? 's' : ''}`
+                                    : 'Autonomous Execution Completed'}{' '}
+                                  &bull;{' '}
                                   {msg.thought?.thoughtTime
                                     ? `${msg.thought.thoughtTime.toFixed(1)}s`
                                     : msg.latency
                                     ? `${(msg.latency / 1000).toFixed(1)}s`
-                                    : '1.8s'}
+                                    : '1.4s'}
                                 </span>
                               </>
                             )}
@@ -439,7 +456,104 @@ export default function AgenticChatSidecar({
 
                         {(expandedThoughts[msg.id] ?? (msg.thought?.isThinking || !msg.text)) && (
                           <div className="thought-box-body">
-                            {msg.thought?.reasoning ? (
+                            {/* Structured Step-by-Step Action Cards */}
+                            {msg.agentSteps && msg.agentSteps.length > 0 ? (
+                              <div className="agent-step-feed">
+                                {msg.agentSteps.map((step, sIdx) => {
+                                  if (step.type === 'plan') {
+                                    return (
+                                      <div key={step.id || sIdx} className="step-card step-card-plan">
+                                        <div className="step-card-header">
+                                          <div className="step-card-title">
+                                            <Compass size={13} className="step-card-icon text-cyan" />
+                                            <span>Cognitive Planning</span>
+                                          </div>
+                                          <span className="step-card-badge badge-plan">Strategized</span>
+                                        </div>
+                                        <div className="step-card-body">{step.content}</div>
+                                      </div>
+                                    );
+                                  }
+                                  if (step.type === 'tool') {
+                                    return (
+                                      <div
+                                        key={step.id || sIdx}
+                                        className={`step-card step-card-tool ${
+                                          step.status === 'running' ? 'step-card-active' : ''
+                                        }`}
+                                      >
+                                        <div className="step-card-header">
+                                          <div className="step-card-title">
+                                            <Wrench size={13} className="step-card-icon text-amber" />
+                                            <span>
+                                              Execute Tool: <code className="tool-code">{step.tool}</code>
+                                            </span>
+                                          </div>
+                                          {step.status === 'running' ? (
+                                            <span className="step-card-badge badge-running">
+                                              <Loader2 size={10} className="step-spinner" />
+                                              <span>Running...</span>
+                                            </span>
+                                          ) : (
+                                            <span className="step-card-badge badge-completed">
+                                              <Check size={10} />
+                                              <span>Executed</span>
+                                            </span>
+                                          )}
+                                        </div>
+                                        {step.args && Object.keys(step.args).length > 0 && (
+                                          <div className="step-card-args">
+                                            {Object.entries(step.args).map(([k, v]) => (
+                                              <span key={k} className="arg-pill">
+                                                <span className="arg-key">{k}:</span>
+                                                <span className="arg-val">
+                                                  {typeof v === 'object' ? JSON.stringify(v) : String(v)}
+                                                </span>
+                                              </span>
+                                            ))}
+                                          </div>
+                                        )}
+                                        {step.summary && (
+                                          <div className="step-card-obs">
+                                            <span className="obs-tag">Observation:</span>
+                                            <span className="obs-text">{step.summary}</span>
+                                          </div>
+                                        )}
+                                      </div>
+                                    );
+                                  }
+                                  if (step.type === 'verification') {
+                                    return (
+                                      <div key={step.id || sIdx} className="step-card step-card-verify">
+                                        <div className="step-card-header">
+                                          <div className="step-card-title">
+                                            <ShieldAlert size={13} className="step-card-icon text-orange" />
+                                            <span>{step.title || 'Verification Guard'}</span>
+                                          </div>
+                                          <span className="step-card-badge badge-verify">Re-routed</span>
+                                        </div>
+                                        <div className="step-card-body">{step.content}</div>
+                                      </div>
+                                    );
+                                  }
+                                  if (step.type === 'synthesis') {
+                                    return (
+                                      <div key={step.id || sIdx} className="step-card step-card-synth">
+                                        <div className="step-card-header">
+                                          <div className="step-card-title">
+                                            <Sparkles size={13} className="step-card-icon text-emerald" />
+                                            <span>Multimodal Synthesis</span>
+                                          </div>
+                                          <span className="step-card-badge badge-synth">Verified</span>
+                                        </div>
+                                        <div className="step-card-body">{step.content}</div>
+                                      </div>
+                                    );
+                                  }
+                                  return null;
+                                })}
+                              </div>
+                            ) : msg.thought?.reasoning ? (
                               <div className="thought-reasoning-stream">
                                 {msg.thought.reasoning.split('\n').map((line, idx) => {
                                   if (line.includes('Agent Action:')) {
@@ -458,7 +572,11 @@ export default function AgenticChatSidecar({
                                       </div>
                                     );
                                   }
-                                  return line.trim() ? <div key={idx} className="thought-text-line">{line}</div> : null;
+                                  return line.trim() ? (
+                                    <div key={idx} className="thought-text-line">
+                                      {line}
+                                    </div>
+                                  ) : null;
                                 })}
                                 {msg.thought?.isThinking && (
                                   <span className="thought-blinking-cursor">|</span>
@@ -467,13 +585,28 @@ export default function AgenticChatSidecar({
                             ) : (
                               <div className="thought-loading-steps">
                                 <div className="thought-step-item active">
-                                  <span className="step-pulsing-dot" />
-                                  <span>Autonomous Document Agent planning navigation...</span>
+                                  <Loader2 size={13} className="step-spinner" />
+                                  <span>Autonomous Document Agent formulating navigation plan...</span>
                                 </div>
-                                <div className="thought-step-item">
-                                  <span className="step-pending-dot" />
-                                  <span>Executing cognitive tool calls &amp; multimodal inspection...</span>
-                                </div>
+                              </div>
+                            )}
+
+                            {/* Collapsible Raw Reasoning Log */}
+                            {msg.agentSteps && msg.agentSteps.length > 0 && msg.thought?.reasoning && (
+                              <div className="raw-stream-accordion">
+                                <button
+                                  type="button"
+                                  className="raw-stream-toggle-btn"
+                                  onClick={() => toggleRawStream(msg.id)}
+                                >
+                                  <Terminal size={11} />
+                                  <span>{showRawStream[msg.id] ? 'Hide Cognitive Log' : 'View Cognitive Log'}</span>
+                                </button>
+                                {showRawStream[msg.id] && (
+                                  <div className="raw-stream-output">
+                                    {msg.thought.reasoning}
+                                  </div>
+                                )}
                               </div>
                             )}
                           </div>
