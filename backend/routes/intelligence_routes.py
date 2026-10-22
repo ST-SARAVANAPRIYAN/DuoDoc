@@ -134,8 +134,8 @@ def score_element_dual_rep(el: DocumentElement, p_idx: int, query: str) -> Tuple
             el_tab_num = el_table_match.group(1).lower()
             norm_el = roman_to_int.get(el_tab_num, el_tab_num)
             if norm_target is None or norm_el == norm_target:
-                s_struct = 0.99
-                s_visual = 0.96
+                s_struct = 1.0
+                s_visual = 0.98
                 s_fused = (0.65 * s_struct) + (0.35 * s_visual)
                 return s_struct, s_visual, s_fused, f"Exact structural match for Table {el_tab_num.upper()} (node #{el.id} on Page {p_idx+1})."
             else:
@@ -144,29 +144,36 @@ def score_element_dual_rep(el: DocumentElement, p_idx: int, query: str) -> Tuple
                 s_fused = 0.08
                 return s_struct, s_visual, s_fused, f"Negative match: Table {el_tab_num} instead of Table {target_table_num}."
 
-        # Result section heading
-        if is_result_query and ("v. result" in t or (el_type == "heading" and "result" in t)):
-            s_struct = 0.99
-            s_visual = 0.96
-            s_fused = (0.65 * s_struct) + (0.35 * s_visual)
-            return s_struct, s_visual, s_fused, f"Result section heading #{el.id} on Page {p_idx+1}."
-
         # Table rows
         if el_type in ("table", "table_row") and is_table_query:
             if any(w in t for w in ["metric", "observed value", "interpretation"]):
-                s_struct = 0.98
-                s_visual = 0.95
+                s_struct = 0.99
+                s_visual = 0.98
                 s_fused = (0.65 * s_struct) + (0.35 * s_visual)
                 return s_struct, s_visual, s_fused, f"Table metric header row #{el.id} on Page {p_idx+1}."
             if any(w in t for w in ["accuracy", "%", "processing time", "performance"]):
-                s_struct = 0.96
-                s_visual = 0.94
+                s_struct = 0.98
+                s_visual = 0.96
                 s_fused = (0.65 * s_struct) + (0.35 * s_visual)
                 return s_struct, s_visual, s_fused, f"Table metric data row #{el.id} on Page {p_idx+1}."
-            s_struct = 0.85
-            s_visual = 0.85
-            s_fused = 0.85
+            s_struct = 0.95
+            s_visual = 0.94
+            s_fused = (0.65 * s_struct) + (0.35 * s_visual)
             return s_struct, s_visual, s_fused, f"Table row #{el.id} on Page {p_idx+1}."
+
+        # Result section heading
+        if is_result_query and ("v. result" in t or (el_type == "heading" and "result" in t)):
+            if is_table_query:
+                # User specifically asked for table; downweight heading so table caption/rows win
+                s_struct = 0.82
+                s_visual = 0.80
+                s_fused = (0.65 * s_struct) + (0.35 * s_visual)
+                return s_struct, s_visual, s_fused, f"Result section heading #{el.id} (table context) on Page {p_idx+1}."
+            else:
+                s_struct = 0.99
+                s_visual = 0.96
+                s_fused = (0.65 * s_struct) + (0.35 * s_visual)
+                return s_struct, s_visual, s_fused, f"Result section heading #{el.id} on Page {p_idx+1}."
 
         if is_result_query and any(w in t for w in ["evaluated based on", "pilot metrics", "performance indicators"]):
             s_struct = 0.94
@@ -278,6 +285,100 @@ def score_element_dual_rep(el: DocumentElement, p_idx: int, query: str) -> Tuple
         f"with spatial layout geometry ({round(s_visual*100, 1)}%) for node #{el.id} ({el_type}) on Page {p_idx + 1}."
     )
     return s_struct, s_visual, s_fused, rationale
+
+
+def compute_table_composite_bbox(
+    page: DocumentPage,
+    anchor_el: DocumentElement,
+    is_table_query: bool = False
+) -> Optional[List[float]]:
+    """
+    Computes the composite union bounding box for an entire table structure:
+    Clusters the table caption (e.g. 'Table I. Overall pilot metrics'),
+    header rows, and all contiguous data rows on the page into a unified bounding box.
+    """
+    if not anchor_el or not page or not page.elements:
+        return None
+
+    table_cluster = []
+    
+    # Case 1: anchor is a table_row element
+    if anchor_el.type in ("table", "table_row") or "table_row" in anchor_el.id:
+        prefix_match = re.match(r"(table_row_\d+_\d+)", anchor_el.id)
+        if prefix_match:
+            group_prefix = prefix_match.group(1)
+            table_cluster = [el for el in page.elements if el.id.startswith(group_prefix)]
+        else:
+            table_cluster = [el for el in page.elements if el.type in ("table", "table_row")]
+            
+        # Check for adjacent caption immediately above or below
+        if table_cluster:
+            t_min_y = min(el.bbox[1] for el in table_cluster)
+            t_max_y = max(el.bbox[3] for el in table_cluster)
+            t_min_x = min(el.bbox[0] for el in table_cluster)
+            t_max_x = max(el.bbox[2] for el in table_cluster)
+            
+            for el in page.elements:
+                if re.search(r"\btable\s+([0-9]+|[ivx]+)\b", el.text.lower()):
+                    if (abs(el.bbox[3] - t_min_y) <= 50 or abs(el.bbox[1] - t_max_y) <= 50) and not (el.bbox[2] < t_min_x - 40 or el.bbox[0] > t_max_x + 40):
+                        table_cluster.append(el)
+                        break
+
+    # Case 2: anchor is a table caption (e.g. Table I. Overall pilot metrics)
+    elif re.search(r"\btable\s+([0-9]+|[ivx]+)\b", anchor_el.text.lower()):
+        table_cluster = [anchor_el]
+        c_min_y, c_max_y = anchor_el.bbox[1], anchor_el.bbox[3]
+        c_min_x, c_max_x = anchor_el.bbox[0], anchor_el.bbox[2]
+        
+        adjacent_rows = [
+            el for el in page.elements
+            if el.type in ("table", "table_row") or "table_row" in el.id
+            if (abs(el.bbox[3] - c_min_y) <= 60 or abs(el.bbox[1] - c_max_y) <= 60)
+            and not (el.bbox[2] < c_min_x - 120 or el.bbox[0] > c_max_x + 120)
+        ]
+        if adjacent_rows:
+            pref_match = re.match(r"(table_row_\d+_\d+)", adjacent_rows[0].id)
+            if pref_match:
+                grp = pref_match.group(1)
+                table_cluster.extend([el for el in page.elements if el.id.startswith(grp)])
+            else:
+                table_cluster.extend(adjacent_rows)
+
+    # Case 3: anchor is a heading / paragraph (e.g. 'V. RESULT') but user asked about a table
+    elif is_table_query:
+        page_tables = [el for el in page.elements if el.type in ("table", "table_row") or "table_row" in el.id]
+        if page_tables:
+            below_tables = [el for el in page_tables if el.bbox[1] >= anchor_el.bbox[1] - 30]
+            target_row = below_tables[0] if below_tables else page_tables[0]
+            pref_match = re.match(r"(table_row_\d+_\d+)", target_row.id)
+            grp = pref_match.group(1) if pref_match else None
+            if grp:
+                table_cluster = [el for el in page.elements if el.id.startswith(grp)]
+            else:
+                table_cluster = [el for el in page_tables if abs(el.bbox[1] - target_row.bbox[1]) <= 250]
+            if table_cluster:
+                t_min_y = min(el.bbox[1] for el in table_cluster)
+                t_max_y = max(el.bbox[3] for el in table_cluster)
+                for el in page.elements:
+                    if re.search(r"\btable\s+([0-9]+|[ivx]+)\b", el.text.lower()):
+                        if abs(el.bbox[3] - t_min_y) <= 50 or abs(el.bbox[1] - t_max_y) <= 50:
+                            table_cluster.append(el)
+                            break
+
+    if not table_cluster:
+        return None
+
+    min_x = min(el.bbox[0] for el in table_cluster)
+    min_y = min(el.bbox[1] for el in table_cluster)
+    max_x = max(el.bbox[2] for el in table_cluster)
+    max_y = max(el.bbox[3] for el in table_cluster)
+    pad = 5.0
+    return [
+        round(max(0.0, min_x - pad), 2),
+        round(max(0.0, min_y - pad), 2),
+        round(min(float(page.width), max_x + pad), 2),
+        round(min(float(page.height), max_y + pad), 2),
+    ]
 
 
 def select_candidate_elements_and_crop(
@@ -411,6 +512,35 @@ def select_candidate_elements_and_crop(
             if chosen_elements:
                 chosen_elements.sort(key=lambda el: (el.bbox[1], el.bbox[0]))
                 candidate_elements = chosen_elements
+
+                # Compute composite table bounding box for the entire table + caption
+                table_and_caption = tab_rows + caption_els
+                if table_and_caption:
+                    t_min_x = min(el.bbox[0] for el in table_and_caption)
+                    t_min_y = min(el.bbox[1] for el in table_and_caption)
+                    t_max_x = max(el.bbox[2] for el in table_and_caption)
+                    t_max_y = max(el.bbox[3] for el in table_and_caption)
+                    pad = 5.0
+                    table_comp_box = [
+                        round(max(0.0, t_min_x - pad), 2),
+                        round(max(0.0, t_min_y - pad), 2),
+                        round(min(float(page.width), t_max_x + pad), 2),
+                        round(min(float(page.height), t_max_y + pad), 2)
+                    ]
+                    for el in table_and_caption:
+                        el.metadata = el.metadata or {}
+                        el.metadata["composite_bbox"] = table_comp_box
+
+                if target_table_num:
+                    citation_tag = f"Page {target_page_idx + 1}, Table {target_table_num.upper()}"
+                elif caption_els:
+                    tab_m = re.search(r"\btable\s+([0-9]+|[ivx]+)\b", caption_els[0].text.lower())
+                    if tab_m:
+                        citation_tag = f"Page {target_page_idx + 1}, Table {tab_m.group(1).upper()}"
+                    else:
+                        citation_tag = f"Page {target_page_idx + 1}, Table"
+                else:
+                    citation_tag = f"Page {target_page_idx + 1}, Table"
             else:
                 candidate_elements = [x[0] for x in scored[:7]]
         else:
@@ -544,6 +674,7 @@ def run_qa_inference(req: QARequest):
 
     table_match = re.search(r"\btable\s+([0-9]+|[ivx]+)\b", q_lower)
     target_table_num = table_match.group(1).lower() if table_match else None
+    is_table_query = any(w in q_lower for w in ["table", "tables", "tabular", "tab."]) or bool(target_table_num)
 
     is_contrib_query = any(w in q_lower for w in [
         "contribution", "contributions", "novelty", "novel", "core contribution",
@@ -649,6 +780,25 @@ def run_qa_inference(req: QARequest):
                     best_el = el
             verified_el = best_el or (candidate_elements[0] if candidate_elements else None)
 
+        if verified_el and is_table_query:
+            is_tbl = (
+                verified_el.type in ("table", "table_row")
+                or "table_row" in verified_el.id
+                or bool(re.search(r"\btable\s+([0-9]+|[ivx]+)\b", verified_el.text.lower()))
+            )
+            if not is_tbl:
+                best_tbl_el = None
+                best_tbl_score = -1.0
+                for el in candidate_elements:
+                    if el.type in ("table", "table_row") or "table_row" in el.id or re.search(r"\btable\s+([0-9]+|[ivx]+)\b", el.text.lower()):
+                        s_s, s_v, s_f, rat = score_element_dual_rep(el, target_page_idx, req.query)
+                        if s_f > best_tbl_score:
+                            best_tbl_score = s_f
+                            best_tbl_el = el
+                if best_tbl_el and best_tbl_score > 0.60:
+                    verified_el = best_tbl_el
+                    target_id = best_tbl_el.id
+
         # Ensure answer provides full explanatory depth for structured Figure/Table/Contribution queries
         if target_fig_num or target_table_num or is_contrib_query:
             needs_extractive_depth = (
@@ -708,6 +858,27 @@ def run_qa_inference(req: QARequest):
                             ]
                             break
 
+            # Table composite bounding box expansion
+            is_table_context = (
+                is_table_query
+                or verified_el.type in ("table", "table_row")
+                or "table_row" in verified_el.id
+                or bool(re.search(r"\btable\s+([0-9]+|[ivx]+)\b", verified_el.text.lower()))
+            )
+            is_table_cluster = False
+            if is_table_context:
+                table_box = compute_table_composite_bbox(page, verified_el, is_table_query=is_table_query)
+                if table_box:
+                    candidate_box = table_box
+                    is_table_cluster = True
+                    tab_m = re.search(r"\btable\s+([0-9]+|[ivx]+)\b", verified_el.text.lower())
+                    if tab_m:
+                        citation_tag = f"Page {target_page_idx + 1}, Table {tab_m.group(1).upper()}"
+                    elif target_table_num:
+                        citation_tag = f"Page {target_page_idx + 1}, Table {target_table_num.upper()}"
+                    else:
+                        citation_tag = f"Page {target_page_idx + 1}, Table"
+
             grounded_bbox = candidate_box or verified_el.bbox
 
             s_s, s_v, s_f, rat = score_element_dual_rep(verified_el, target_page_idx, req.query)
@@ -736,7 +907,7 @@ def run_qa_inference(req: QARequest):
             "stage_2_dual_representation": {
                 "structural": {
                     "element_id": target_id or "N/A",
-                    "type": getattr(verified_el, "type", "paragraph") if verified_el else "paragraph",
+                    "type": "table" if (is_table_cluster or (verified_el and (verified_el.type in ("table", "table_row") or "table_row" in verified_el.id))) else (getattr(verified_el, "type", "paragraph") if verified_el else "paragraph"),
                     "font_family": getattr(verified_el.style, "font_family", "Times New Roman") if verified_el and hasattr(verified_el, "style") else "Default",
                     "font_size": getattr(verified_el.style, "font_size", 10.0) if verified_el and hasattr(verified_el, "style") else 10.0,
                     "bold": getattr(verified_el.style, "bold", False) if verified_el and hasattr(verified_el, "style") else False,
@@ -830,6 +1001,45 @@ def run_qa_inference(req: QARequest):
         grounded_bbox = target_el.bbox if target_el else (req.region_bbox if req.scope_mode == "selected_region" else None)
         evidence_text = target_el.text if target_el else None
 
+        if target_el:
+            if is_table_query:
+                is_tbl = (
+                    target_el.type in ("table", "table_row")
+                    or "table_row" in target_el.id
+                    or bool(re.search(r"\btable\s+([0-9]+|[ivx]+)\b", target_el.text.lower()))
+                )
+                if not is_tbl:
+                    best_tbl_el = None
+                    best_tbl_score = -1.0
+                    for el in candidate_elements:
+                        if el.type in ("table", "table_row") or "table_row" in el.id or re.search(r"\btable\s+([0-9]+|[ivx]+)\b", el.text.lower()):
+                            s_s, s_v, s_f, rat = score_element_dual_rep(el, target_page_idx, req.query)
+                            if s_f > best_tbl_score:
+                                best_tbl_score = s_f
+                                best_tbl_el = el
+                    if best_tbl_el and best_tbl_score > 0.60:
+                        target_el = best_tbl_el
+                        target_id = best_tbl_el.id
+                        evidence_text = best_tbl_el.text
+
+            is_table_context = (
+                is_table_query
+                or target_el.type in ("table", "table_row")
+                or "table_row" in target_el.id
+                or bool(re.search(r"\btable\s+([0-9]+|[ivx]+)\b", target_el.text.lower()))
+            )
+            if is_table_context:
+                table_box = compute_table_composite_bbox(page, target_el, is_table_query=is_table_query)
+                if table_box:
+                    grounded_bbox = table_box
+                    tab_m = re.search(r"\btable\s+([0-9]+|[ivx]+)\b", target_el.text.lower())
+                    if tab_m:
+                        citation_tag = f"Page {target_page_idx + 1}, Table {tab_m.group(1).upper()}"
+                    elif target_table_num:
+                        citation_tag = f"Page {target_page_idx + 1}, Table {target_table_num.upper()}"
+                    else:
+                        citation_tag = f"Page {target_page_idx + 1}, Table"
+
         return QAResponse(
             document_id=req.document_id,
             page_idx=target_page_idx,
@@ -910,6 +1120,10 @@ def run_qa_streaming(req: QARequest):
     fig_match = re.search(r"\b(?:fig|figure)\.?\s*([0-9]+|[ivx]+|[a-z])\b", q_lower)
     target_fig_num = fig_match.group(1).lower() if fig_match else None
 
+    table_match = re.search(r"\btable\s+([0-9]+|[ivx]+)\b", q_lower)
+    target_table_num = table_match.group(1).lower() if table_match else None
+    is_table_query = any(w in q_lower for w in ["table", "tables", "tabular", "tab."]) or bool(target_table_num)
+
     def event_stream():
         nonlocal target_page_idx
         start_time = time.perf_counter()
@@ -984,7 +1198,27 @@ def run_qa_streaming(req: QARequest):
                                     best_el = el
                             verified_el = best_el or (candidate_elements[0] if candidate_elements else None)
 
+                        if verified_el and is_table_query:
+                            is_tbl = (
+                                verified_el.type in ("table", "table_row")
+                                or "table_row" in verified_el.id
+                                or bool(re.search(r"\btable\s+([0-9]+|[ivx]+)\b", verified_el.text.lower()))
+                            )
+                            if not is_tbl:
+                                best_tbl_el = None
+                                best_tbl_score = -1.0
+                                for el in page.elements:
+                                    if el.type in ("table", "table_row") or "table_row" in el.id or re.search(r"\btable\s+([0-9]+|[ivx]+)\b", el.text.lower()):
+                                        s_s, s_v, s_f, rat = score_element_dual_rep(el, target_page_idx, req.query)
+                                        if s_f > best_tbl_score:
+                                            best_tbl_score = s_f
+                                            best_tbl_el = el
+                                if best_tbl_el and best_tbl_score > 0.60:
+                                    verified_el = best_tbl_el
+                                    target_id = best_tbl_el.id
+
                         evidence_text = verified_el.text if verified_el else None
+                        is_table_cluster = False
                         if verified_el:
                             target_id = verified_el.id
                             vlm_matched = (qa_result.get("grounded_element_id") == verified_el.id)
@@ -1006,8 +1240,28 @@ def run_qa_streaming(req: QARequest):
                                             ]
                                             break
 
-                            grounded_bbox = candidate_box or verified_el.bbox
                             citation = f"Page {target_page_idx + 1}, Block #{target_id}"
+
+                            is_table_context = (
+                                is_table_query
+                                or verified_el.type in ("table", "table_row")
+                                or "table_row" in verified_el.id
+                                or bool(re.search(r"\btable\s+([0-9]+|[ivx]+)\b", verified_el.text.lower()))
+                            )
+                            if is_table_context:
+                                table_box = compute_table_composite_bbox(page, verified_el, is_table_query=is_table_query)
+                                if table_box:
+                                    candidate_box = table_box
+                                    is_table_cluster = True
+                                    tab_m = re.search(r"\btable\s+([0-9]+|[ivx]+)\b", verified_el.text.lower())
+                                    if tab_m:
+                                        citation = f"Page {target_page_idx + 1}, Table {tab_m.group(1).upper()}"
+                                    elif target_table_num:
+                                        citation = f"Page {target_page_idx + 1}, Table {target_table_num.upper()}"
+                                    else:
+                                        citation = f"Page {target_page_idx + 1}, Table"
+
+                            grounded_bbox = candidate_box or verified_el.bbox
                         else:
                             grounded_bbox = qa_result.get("grounded_bbox")
                             citation = citation_tag
@@ -1031,7 +1285,7 @@ def run_qa_streaming(req: QARequest):
                         "stage_2_dual_representation": {
                             "structural": {
                                 "element_id": target_id or "N/A",
-                                "type": getattr(verified_el, "type", "paragraph") if verified_el else "paragraph",
+                                "type": "table" if (is_table_cluster or (verified_el and (verified_el.type in ("table", "table_row") or "table_row" in verified_el.id))) else (getattr(verified_el, "type", "paragraph") if verified_el else "paragraph"),
                                 "font_family": getattr(verified_el.style, "font_family", "Times New Roman") if verified_el and hasattr(verified_el, "style") else "Default",
                                 "font_size": getattr(verified_el.style, "font_size", 10.0) if verified_el and hasattr(verified_el, "style") else 10.0,
                                 "bold": getattr(verified_el.style, "bold", False) if verified_el and hasattr(verified_el, "style") else False,

@@ -128,8 +128,7 @@ export default function AgenticChatSidecar({
   onCitationClick,
   onClearMessages,
   onUploadClick,
-  benchmarkSamples,
-  onSelectBenchmark,
+  onOpenLibrary,
   composerRef,
 }) {
   const [inputText, setInputText] = useState('');
@@ -218,7 +217,16 @@ export default function AgenticChatSidecar({
   ];
 
   return (
-    <div className="agentic-sidecar">
+    <div className="agentic-sidecar neo-window">
+      <div className="neo-window-header">
+        <div className="neo-window-dots">
+          <span className="dot-red" />
+          <span className="dot-yellow" />
+          <span className="dot-green" />
+        </div>
+        <span className="neo-window-title font-mono">agentic_chat.sidecar</span>
+      </div>
+
       {/* Header Bar */}
       <div className="sidecar-header">
         <div className="agent-identity">
@@ -289,26 +297,18 @@ export default function AgenticChatSidecar({
             </button>
           </div>
 
-          {benchmarkSamples && benchmarkSamples.length > 0 && (
-            <div className="benchmark-list">
-              <div className="drawer-section-label">Benchmark Documents</div>
-              {benchmarkSamples.map((s) => (
-                <button
-                  key={s.id}
-                  type="button"
-                  className={`benchmark-item-btn ${
-                    docSummary?.document_id === s.document_id ? 'benchmark-active' : ''
-                  }`}
-                  onClick={() => {
-                    onSelectBenchmark(s.id);
-                    setShowDocSelector(false);
-                  }}
-                >
-                  <div className="benchmark-item-title">{s.label}</div>
-                </button>
-              ))}
-            </div>
-          )}
+          <div style={{ marginBottom: '0.65rem' }}>
+            <button
+              type="button"
+              className="drawer-action-btn"
+              onClick={() => {
+                setShowDocSelector(false);
+                onOpenLibrary?.();
+              }}
+            >
+              <FileText size={13} /> Select From Document Library
+            </button>
+          </div>
         </div>
       )}
 

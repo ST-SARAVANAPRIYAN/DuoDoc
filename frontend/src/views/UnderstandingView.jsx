@@ -4,15 +4,17 @@ import {
   Search,
   FileText,
   AlertCircle,
-  Sparkles
+  Sparkles,
+  ArrowLeft
 } from 'lucide-react';
 import ScrollableDocumentViewer from '../components/ScrollableDocumentViewer';
 import AgenticChatSidecar from '../components/AgenticChatSidecar';
-import { uploadDocument, fetchBenchmarkSamples, fetchDocument, runQA, streamQA } from '../api/client';
+import ThemeToggle from '../components/ThemeToggle';
+import { uploadDocument, fetchDocument, runQA, streamQA } from '../api/client';
+import { getDocuments, getChatHistory, saveChatMessage } from '../api/libraryApi';
 
-export default function UnderstandingView({ activeEngine }) {
+export default function UnderstandingView({ activeEngine, selectedDocument, onBackToLibrary }) {
   const [docSummary, setDocSummary] = useState(null);
-  const [benchmarkSamples, setBenchmarkSamples] = useState([]);
   const [scopeMode, setScopeMode] = useState('whole_doc'); // 'whole_doc' | 'selected_region'
   const [selectedPassage, setSelectedPassage] = useState(null); // { pageIdx, elementId, text, bbox, type }
   const [activeCitation, setActiveCitation] = useState(null); // { pageIdx, bbox, label }
@@ -27,69 +29,82 @@ export default function UnderstandingView({ activeEngine }) {
   const abortControllerRef = useRef(null);
   const activeTimerRef = useRef(null);
 
-  // Load benchmark samples on mount & auto-load featured paper
+  // Load selected document when passed from Library
   useEffect(() => {
-    fetchBenchmarkSamples()
-      .then(async (samples) => {
-        setBenchmarkSamples(samples);
-        if (samples.length > 0 && !docSummary) {
-          const featured = samples.find((s) => s.id === 'doc_70c0156668') || samples[0];
-          handleSelectBenchmark(featured.id, samples);
-        }
-      })
-      .catch((err) => console.warn('Could not load benchmark samples:', err));
-  }, []);
+    if (selectedDocument) {
+      setIsLoading(true);
+      fetchDocument(selectedDocument.document_id)
+        .then(async (doc) => {
+          setDocSummary(doc);
+          setSelectedPassage(null);
+          setActiveCitation(null);
+          setScopeMode('whole_doc');
 
-  // Select a benchmark or pre-loaded document
-  const handleSelectBenchmark = async (sampleId, samplesList = benchmarkSamples) => {
-    const sample = samplesList.find((s) => s.id === sampleId);
-    if (!sample) return;
-
-    setError(null);
-    setIsLoading(true);
-
-    try {
-      if (sample.document_id === 'doc_70c0156668') {
-        const doc = await fetchDocument('doc_70c0156668');
-        setDocSummary(doc);
-      } else {
-        setDocSummary({
-          document_id: sample.document_id,
-          filename: sample.label,
-          page_count: 1,
-          pages: [
-            {
-              page_id: 0,
-              width: 800,
-              height: 1000,
-              image_url: sample.image_url,
-              elements: sample.elements,
-            },
-          ],
-        });
-      }
-
-      // Reset state for new document
-      setSelectedPassage(null);
-      setActiveCitation(null);
-      setScopeMode('whole_doc');
-
-      // Initialize welcome message for this document
-      setMessages([
-        {
-          id: 'welcome-1',
-          role: 'assistant',
-          text: `Loaded "${sample.label}". You can ask any question across the document, or click any paragraph / highlight text on the canvas to focus your query.`,
-          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        },
-      ]);
-    } catch (err) {
-      console.error('Failed to load document:', err);
-      setError(`Failed to load document: ${err.message}`);
-    } finally {
-      setIsLoading(false);
+          // Load chat history from MongoDB
+          try {
+            const histRes = await getChatHistory(selectedDocument.document_id);
+            if (histRes.messages && histRes.messages.length > 0) {
+              setMessages(histRes.messages);
+            } else {
+              setMessages([
+                {
+                  id: 'welcome-1',
+                  role: 'assistant',
+                  text: `### ${selectedDocument.title || selectedDocument.filename}\n\nDocument loaded into workspace. You can ask questions across the whole document, or drag to highlight specific paragraphs, tables, or architecture diagrams on the canvas.`,
+                  scopeMode: 'whole_doc',
+                  engine: activeEngine,
+                  timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                }
+              ]);
+            }
+          } catch (e) {
+            console.warn('Could not load chat history:', e);
+          }
+        })
+        .catch((err) => setError(err.message))
+        .finally(() => setIsLoading(false));
     }
-  };
+  }, [selectedDocument]);
+
+  // Auto-load most recent document from library if none explicitly selected
+  useEffect(() => {
+    if (!selectedDocument && !docSummary) {
+      setIsLoading(true);
+      getDocuments({ limit: 1 })
+        .then(async (res) => {
+          if (res.documents && res.documents.length > 0) {
+            const first = res.documents[0];
+            const doc = await fetchDocument(first.document_id);
+            setDocSummary(doc);
+            setSelectedPassage(null);
+            setActiveCitation(null);
+            setScopeMode('whole_doc');
+
+            try {
+              const histRes = await getChatHistory(first.document_id);
+              if (histRes.messages && histRes.messages.length > 0) {
+                setMessages(histRes.messages);
+              } else {
+                setMessages([
+                  {
+                    id: 'welcome-1',
+                    role: 'assistant',
+                    text: `### ${first.title || first.filename}\n\nDocument loaded from library. You can ask questions across the whole document, or drag to highlight specific paragraphs, tables, or architecture diagrams on the canvas.`,
+                    scopeMode: 'whole_doc',
+                    engine: activeEngine,
+                    timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                  }
+                ]);
+              }
+            } catch (e) {
+              console.warn('Could not load chat history:', e);
+            }
+          }
+        })
+        .catch((err) => console.warn('Could not auto-load first document:', err))
+        .finally(() => setIsLoading(false));
+    }
+  }, [selectedDocument]);
 
   // Upload Word (.docx) handler
   const handleFileUpload = async (e) => {
@@ -141,6 +156,9 @@ export default function UnderstandingView({ activeEngine }) {
     };
 
     setMessages((prev) => [...prev, userMsg]);
+    if (docSummary?.document_id) {
+      saveChatMessage(docSummary.document_id, userMsg).catch((e) => console.warn('Failed saving user message:', e));
+    }
     setIsLoading(true);
     setError(null);
 
@@ -359,6 +377,17 @@ export default function UnderstandingView({ activeEngine }) {
             setActiveCitation(citationObj);
             viewerRef.current?.scrollToPageAndBbox(citationObj.pageIdx, citationObj.bbox);
           }
+
+          if (docSummary?.document_id) {
+            saveChatMessage(docSummary.document_id, {
+              role: 'assistant',
+              text: result.answer || '',
+              thought: { reasoning: result.reasoning || '' },
+              citation: citationObj,
+              confidence: result.confidence,
+              agentSteps: result.agentSteps || []
+            }).catch((e) => console.warn('Failed saving assistant message:', e));
+          }
         },
         onError: (err) => {
           clearInterval(timerInterval);
@@ -457,34 +486,61 @@ export default function UnderstandingView({ activeEngine }) {
   };
 
   return (
-    <div className="agentic-understanding-container">
+    <div className="agentic-understanding-container portfolio-root">
       {/* Hidden file input for DOCX upload */}
       <input
         ref={fileInputRef}
         type="file"
-        accept=".docx,.doc"
+        accept=".docx,.doc,.pdf"
         style={{ display: 'none' }}
         onChange={handleFileUpload}
       />
 
       {/* Top Context & Status Bar */}
-      <div className="understanding-top-bar">
-        <div className="top-bar-left">
-          <h2 className="workspace-heading">Document Understanding</h2>
-          <div className="workspace-subheading">
-            Dual-representation VLM analysis &bull; Select any paragraph or passage on the document to ground queries
+      <div className="understanding-top-bar neo-window">
+        <div className="neo-window-header">
+          <div className="neo-window-dots">
+            <span className="dot-red" />
+            <span className="dot-yellow" />
+            <span className="dot-green" />
           </div>
+          <span className="neo-window-title font-mono">workspace.qa // dual_vlm</span>
         </div>
+        <div className="understanding-top-bar-body flex items-center justify-between p-3">
+          <div className="top-bar-left flex items-center gap-3">
+            {onBackToLibrary && (
+              <button
+                type="button"
+                className="neo-btn-back"
+                onClick={onBackToLibrary}
+                title="Return to Document Library"
+              >
+                <ArrowLeft size={14} />
+                <span>&larr; Library</span>
+              </button>
+            )}
+            <div>
+              <h2 className="workspace-heading font-mono text-base font-bold">
+                {docSummary?.filename || selectedDocument?.title || 'Document Understanding'}
+              </h2>
+              <div className="workspace-subheading font-mono text-xs opacity-75">
+                {selectedDocument
+                  ? `Active Document (${selectedDocument.file_type?.toUpperCase()} \u2022 ${docSummary?.page_count || selectedDocument.page_count} pages) \u2022 Grounded dual-representation VLM analysis`
+                  : 'Dual-representation VLM analysis \u2022 Select any paragraph or passage on canvas to ground queries'}
+              </div>
+            </div>
+          </div>
 
-        <div className="top-bar-right">
-          <button
-            type="button"
-            className="action-btn-clean"
-            onClick={() => fileInputRef.current?.click()}
-          >
-            <Upload size={14} />
-            <span>Upload Document</span>
-          </button>
+          <div className="top-bar-right">
+            <button
+              type="button"
+              className="neo-btn"
+              onClick={() => fileInputRef.current?.click()}
+            >
+              <Upload size={14} />
+              <span>Upload Document</span>
+            </button>
+          </div>
         </div>
       </div>
 
@@ -530,8 +586,7 @@ export default function UnderstandingView({ activeEngine }) {
             onCitationClick={handleCitationClick}
             onClearMessages={() => setMessages([])}
             onUploadClick={() => fileInputRef.current?.click()}
-            benchmarkSamples={benchmarkSamples}
-            onSelectBenchmark={handleSelectBenchmark}
+            onOpenLibrary={onBackToLibrary}
           />
         </div>
       </div>

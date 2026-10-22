@@ -35,6 +35,11 @@ cleanup() {
         kill -TERM "$BACKEND_PID" 2>/dev/null || true
     fi
 
+    if [ "$STARTED_MONGOD" = "true" ]; then
+        echo " Stopping local MongoDB instance..."
+        mongod --dbpath "$DIR/data/db" --shutdown >/dev/null 2>&1 || pkill -f "mongod --dbpath $DIR/data/db" >/dev/null 2>&1 || true
+    fi
+
     # Small grace wait
     wait "$BACKEND_PID" 2>/dev/null || true
     wait "$FRONTEND_PID" 2>/dev/null || true
@@ -47,7 +52,20 @@ cleanup() {
 
 trap cleanup SIGINT SIGTERM EXIT
 
-# 0. Launch Qwopus llama-server on port 8085 as default intelligence backend
+# 0. Check & launch local MongoDB if not already listening on port 27017
+STARTED_MONGOD=false
+if ! nc -z 127.0.0.1 27017 2>/dev/null && ! (echo > /dev/tcp/127.0.0.1/27017) 2>/dev/null; then
+    if command -v mongod >/dev/null 2>&1; then
+        echo "  [DATABASE] Starting local MongoDB instance on port 27017..."
+        mkdir -p "$DIR/data/db"
+        mongod --dbpath "$DIR/data/db" --port 27017 --bind_ip 127.0.0.1 --logpath "$DIR/data/mongodb.log" --fork >/dev/null 2>&1 || true
+        STARTED_MONGOD=true
+    else
+        echo "  [NOTICE] mongod not found. System will utilize resilient local database mode."
+    fi
+fi
+
+# 1. Launch Qwopus llama-server on port 8085 as default intelligence backend
 START_QWOPUS=true
 for arg in "$@"; do
     if [ "$arg" = "--no-qwopus" ]; then
@@ -67,12 +85,12 @@ else
     echo "  [INFO] --no-qwopus flag detected. Qwopus server deferred."
 fi
 
-# 1. Start FastAPI Backend in background
+# 2. Start FastAPI Backend in background
 export PYTHONPATH="$DIR/src:$DIR/backend:$PYTHONPATH"
 "$DIR/.venv/bin/python" -m uvicorn backend.app:app --host 0.0.0.0 --port 8000 --reload --reload-dir "$DIR/backend" --reload-dir "$DIR/src" &
 BACKEND_PID=$!
 
-# 2. Start React Frontend (Vite) in background
+# 3. Start React Frontend (Vite) in background
 (cd "$DIR/frontend" && exec npm run dev -- --host 0.0.0.0 --port 5173) &
 FRONTEND_PID=$!
 

@@ -113,7 +113,7 @@ export default function DocumentCanvas({
           </div>
         ) : (
           <div style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>
-            No document loaded. Upload a document or select a benchmark form to begin.
+            No document loaded. Please select a document from your library or upload a file to begin.
           </div>
         )}
       </div>

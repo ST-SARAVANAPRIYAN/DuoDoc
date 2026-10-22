@@ -32,6 +32,11 @@
 | **Phase 23** | Modular Autonomous Document Agent & Cognitive ReAct Architecture | **COMPLETED** | 26/26 Tests Passed, ReAct Tool Suite, SSE Stream, Grounding Chips & Modern Agentic UI |
 | **Phase 24** | Focal Anchor Grounding & Hierarchical Context Expansion Engine | **COMPLETED** | 26/26 Tests Passed, AABB Overlap, Neighboring Context Window, Zero Grounding Hijack |
 | **Phase 25** | Document Scope Gate & Safe Abstention Engine (Dual-Defense) | **COMPLETED** | 26/26 Tests Passed, OOD Code/Trivia Filter, Zero Hallucination, Grounding Boundary |
+| **Phase 27** | Two-Role Consolidation (User/Admin), Dedicated Profile Page, Mock Cleanup & Agent Reasoner UI | **COMPLETED** | Mock Cleaned, 2 Roles (User/Admin), ProfileView, Header Flex Fix, Neo-Brutalist Step Cards, 26/26 Tests Passed |
+| **Phase 28** | Resilient Dual-Store Architecture, Multi-Format Upload Restoration, MongoDB Daemon Sync & UI CSS Polish | **COMPLETED** | MongoDB Auto-Start + LocalDatabase Fallback, PDF/DOCX Image Pipeline, Uncategorized Query Fix, UI Utilities & Swatches (26/26 Tests Passed) |
+| **Phase 32** | Full Table Spatial Clustering & Grounding Expansion Engine | **COMPLETED** | Table Caption + Multi-Row Bounding Box Cluster, Table Node Priority Scorer, Canvas & Crop Patch Framing (26/26 Tests Passed) |
+| **Phase 33** | Mock Document Cleanup & Full Document Management Lifecycle Suite | **COMPLETED** | Mock & Scratch Document Purge, Clean Project Paper Seeding, Folder/Document CRUD Lifecycle Suite (29/29 Tests Passed) |
+| **Phase 34** | Qwopus Model Migration, Project Structure Organization & Gitignore Hardening | **COMPLETED** | Moved 6.2 GB GGUF Weights to models/qwopus, Created Backwards-Compatible Symlinks, Gitignore Hardened (29/29 Tests Passed) |
 
 ---
 
@@ -978,6 +983,379 @@
 
 
 
+
+
+
+
+
+---
+
+## Phase 26 Deliverables & Verification Log
+
+### 1. MongoDB Full-Stack Persistence Architecture (`backend/database/mongodb.py`)
+* **Database Infrastructure:**
+  * Configured local MongoDB engine (`mongodb://localhost:27017`) on database `multimodal_doc_ai` with automatic schema initialization and index creation.
+  * Collections:
+    * `users`: User profiles, JWT bcrypt credential hashes, active roles (`researcher`, `educator`, `admin`).
+    * `folders`: User-created document folders/categories with custom name, hex color swatch, icon, and description.
+    * `documents`: Comprehensive document metadata, file paths, page count, file type (`pdf`/`docx`), size, timestamps, and active `folder_id`. Auto-indexed 44 existing documents from disk upon startup.
+    * `chat_sessions`: Per-document chat message history, timestamps, reasoning traces, and grounding scope modes.
+  * Auto-seeded 3 demo accounts (`saravana` researcher, `educator`, `admin`) and 3 starter categories (*Deep Learning Papers*, *Final Year Docs*, *Coursework*).
+
+### 2. Full-Stack Authentication & Document Library APIs
+* **Authentication Router (`backend/routes/auth_routes.py`):**
+  * `/api/auth/register`: New user registration with bcrypt password hashing and automatic JWT token generation.
+  * `/api/auth/login`: Credential validation returning bearer access token and profile info.
+  * `/api/auth/me`: Current active user profile with JWT authentication.
+  * `/api/auth/switch-role`: Instant role switching for demo evaluations.
+* **Document Library Router (`backend/routes/document_library_routes.py`):**
+  * `/api/library/folders` (GET, POST): List user categories with document counts and create new folders.
+  * `/api/library/folders/{folder_id}` (DELETE): Delete category and safely re-assign contained documents to *Uncategorized*.
+  * `/api/library/documents` (GET): Filter documents by folder ID, search keyword, and file type (`all`, `pdf`, `docx`).
+  * `/api/library/documents/{doc_id}/move` (POST, PATCH): Move document between custom folders.
+  * `/api/library/documents/{doc_id}` (DELETE): Remove document metadata and uploaded file safely.
+  * `/api/library/upload` (POST): Multi-format parser for PDF, DOCX, and images with automatic folder assignment.
+  * `/api/library/documents/{doc_id}/chat` (GET, POST): Persistent MongoDB chat session history.
+
+### 3. Neo-Morphism & Neo-Brutalist UI Overhaul
+* **Design Language & Visual System (mirrored from `/home/saravana/projects/portfolio/`):**
+  * **Typography:** Space Grotesk & Space Mono typography injected via Google Fonts.
+  * **Tokens:** `--neo-border: 2px solid var(--border-color)`, `--neo-shadow: 4px 4px 0px #000`, `--accent: #39ff14` (Lime), `--accent-2: #00f0ff` (Cyan).
+  * **Themes:**
+    * **Dark Theme:** Jet black background (`#08090c`), dark panels (`#161722`), electric lime accents, and 40px blueprint grid.
+    * **Sakura Theme:** Warm paper background (`#faf3eb`), white panels (`#ffffff`), vivid pink accents (`#ff5c8a`), and subtle blueprint lines.
+    * **Circular View Transitions:** Smooth circular expanding ripple (`document.startViewTransition`) originating from the toggle button coordinates.
+* **Component Suite:**
+  * **`Header.jsx`:** Master neo-header with Mac/terminal dots (`.dot-red`, `.dot-yellow`, `.dot-green`), 4 navigation tabs, engine dropdown, theme toggle, and clickable user role badge.
+  * **`DocumentLibraryView.jsx`:** Sidebar category tree with color dots and delete controls, debounced search bar, format filters, and bento grid of document cards.
+  * **`UnderstandingView.jsx`:** Seamless click-to-open from library cards, loading document canvas, persistent MongoDB chat messages, and a `< Library` back button.
+  * **Modals:** `AuthModal` (role switcher, sign in, register), `CreateFolderModal` (color palette swatches), and `ImportDocumentModal` (drag-and-drop file uploader).
+
+### 4. Verification & Quality Assurance
+* **End-to-End API Integration Test (`TestClient`):**
+  * Verified Login, Profile Fetch, Folder Creation, Document Querying (44 docs), Document Move (POST & PATCH), Chat Message Insertion & Fetching, and Category Deletion. All returned HTTP 200 OK.
+* **Frontend Production Build:**
+  * `npm run build` executed cleanly in 286ms with zero compilation or syntax errors.
+
+### 5. Homepage, Dedicated Auth Pages & Lag-Free Animation Engine
+* **Dedicated Homepage (`frontend/src/views/HomeView.jsx`):**
+  * Neo-Window Hero Section with hardware telemetry badge (`RTX 4050 CUDA 12.4`), headline, taglines, and direct navigation CTAs.
+  * Continuous Infinite Marquee Strip (`neoMarquee` CSS animation).
+  * 6-Module Architectural Bento Grid: Dual-Layer VLM, Interactive Canvas Grounding, Safe Abstention Gate, User Categories & MongoDB Library, Grounded Word Manipulation, and Cognitive ReAct Agent.
+  * Interactive Role Persona cards (`Researcher`, `Educator`, `Admin`) with instant role-switching capabilities.
+  * Project & Team 15 Footer Banner (M. Kumarasamy College of Engineering, Dept of AI & Data Science).
+* **Dedicated Authentication Views (`LoginView.jsx` & `RegisterView.jsx`):**
+  * Full-page Neo-Brutalist centered windows with blueprint grid background.
+  * One-Click Demo Role Logins (`Saravana Researcher`, `Educator`, `Admin`) for rapid evaluator testing.
+  * Password visibility toggles, form validation, error banners, and local on-premise security guarantee badges.
+* **Page Logo Removal:**
+  * Fully removed the `<Layers size={18} />` logo icon from `Header.jsx` and styling.
+  * Replaced with clean, high-impact typography: `DOCUMIND.` with electric accent dot and `Multimodal Intelligence` subtitle.
+* **UI Lag Elimination & Color Fixes:**
+  * Eliminated all expensive `backdrop-filter: blur(...)` calls across `.app-header`, `.glass-panel`, `.modal-overlay`, `.scroll-to-bottom-floating-btn`, and `.neo-modal-backdrop`.
+  * Replaced with clean, solid/semi-solid high-performance neo-brutalist backgrounds (`#161722` in Dark, `#ffffff` in Sakura Light), removing GPU compositor stutter and frame drops.
+  * Added hardware-accelerated transforms (`translate3d(0, 0, 0)`, `will-change: transform`).
+* **Rich Micro-Animations & Transitions:**
+  * Smooth page entry cascade (`@keyframes neoFadeIn`, `@keyframes neoSlideUp`).
+  * Continuous infinite marquee (`@keyframes neoMarquee`).
+  * Breathing pulse glow on live status badges (`@keyframes pulseGlow`).
+  * Dynamic button click & hover physics (`translate3d(-3px, -3px, 0)` with neo-shadow shifts).
+
+### 6. Theme Mixing Resolution, Landing Navbar Decoupling & QA Chat Neo-Brutalist Overhaul
+* **Theme System Synchronization (Reference: `/home/saravana/projects/portfolio/style.css`):**
+  * Root Cause Analysis: Legacy CSS variables (`--bg-primary`, `--bg-surface`, `--bg-surface-elevated`, etc.) were hardcoded to dark navy values (`#090D16`, `#0F172A`, `#1E293B`), preventing sub-components from responding to Sakura light mode.
+  * Solution: Mapped all legacy variables directly to dynamic portfolio tokens (`var(--bg)`, `var(--bg-soft)`, `var(--panel)`, `var(--heading)`, `var(--text)`, `var(--border-color)`, `var(--accent)`).
+  * Enforced global `:root[data-theme='sakura']`, `html[data-theme='sakura']`, and `body[data-theme='sakura']` overrides.
+  * Upgraded `ThemeToggle.jsx` to apply theme attributes to `document.documentElement`, `document.body`, and `#root` simultaneously with 650ms circular expanding clip-path transitions.
+* **Landing Header Decoupling:**
+  * Removed internal workspace tabs (`1. Library`, `2. QA & Chat`, `3. Specs`, `4. Manipulation`) and engine selector dropdown from the homepage index view.
+  * Replaced with a clean, high-impact landing header with direct action links (`Document Library`, `QA Workspace`, `Specs`), Theme Switcher, and `Sign In` button.
+  * Suppressed header completely on standalone `login` and `register` pages for a distraction-free authentication experience with in-situ theme toggle.
+* **QA Chat & Document Viewer Neo-Brutalist Overhaul:**
+  * Upgraded `.scrollable-doc-viewer` and `.agentic-sidecar` into true `.neo-window` containers with sharp corners, 2px borders, 4px solid drop shadows, and window terminal dots (`.dot-red`, `.dot-yellow`, `.dot-green`).
+  * Converted toolbars, scope selector segmented bars, welcome prompt chips, user and assistant message bubbles, and composer input areas to dynamically switch between Dark (`#161722` / `#08090c`) and Sakura (`#ffffff` / `#faf3eb`).
+  * Replaced hardcoded text colors with `var(--heading)` and `var(--text)` to eliminate low-contrast text clashing in light mode.
+
+---
+
+## Phase 27 Deliverables & Verification Log
+
+### 1. Mock Data & Mock Documents Elimination
+* **Eliminated Static Benchmark Fallback:**
+  * Removed `fetchBenchmarkSamples` auto-seeding effect from `UnderstandingView.jsx` and removed static benchmark drawer from `AgenticChatSidecar.jsx`.
+  * The system now strictly operates on real user documents uploaded or stored in MongoDB.
+  * When no document is explicitly selected, the workspace automatically loads the user's latest real uploaded document or prompts to select from the Document Library.
+* **Database Clean-up:**
+  * Removed hardcoded auto-seeded placeholder folders (`Research Papers`, `Architecture & Specs`, `Evaluation & Benchmarks`) from `mongodb.py`.
+  * Users now have complete freedom to create, edit, move, and manage custom folder categories as needed.
+
+### 2. Two-Role Consolidation (`user` and `admin`)
+* **Role Simplification:**
+  * Consolidated the 3-role schema (`researcher`, `educator`, `admin`) into strictly two operational roles: `user` (Standard User & Scholar) and `admin` (System Administrator).
+  * Removed legacy `educator` user from database and backend schema.
+  * Default demo accounts: `saravana` (`user`) and `admin` (`admin`).
+  * Updated `backend/routes/auth_routes.py` and `backend/database/mongodb.py` to validate strictly `{"user", "admin"}`.
+  * Updated `AuthContext.jsx`, `LoginView.jsx`, `RegisterView.jsx`, `HomeView.jsx`, and `AuthModal.jsx` to reflect 2-role system across all forms and selectors.
+
+### 3. Dedicated User Profile Page (`frontend/src/views/ProfileView.jsx`)
+* **Neo-Brutalist Profile Architecture:**
+  * Created dedicated `ProfileView.jsx` accessible from Header, Home, and Library.
+  * Displays authenticated user badge, username, email, active operational role, and account creation timestamp.
+  * **Interactive Role Switcher:** One-click toggle between `USER` and `ADMIN` roles with active status highlights and permission breakdowns.
+  * **Repository & Telemetry Metrics Grid:** Real-time counts of Total Documents Indexed, Custom Folders Created, Pages Processed, and Active Engine (`Qwopus 3.5 9B`).
+  * **Recent Documents Quick-Access:** Click-to-launch cards opening documents straight into QA Workspace.
+  * Dedicated "Sign Out" button terminating active JWT session and returning to Login.
+
+### 4. UI Fixes in Uploaded Images (Image 0, Image 1, Image 2)
+* **Image 0 Fix (Landing Header Alignment & Flexbox Layout):**
+  * Root Cause: Core layout utility classes (`.flex`, `.items-center`, `.gap-3`, etc.) were missing because Tailwind CSS is not bundled in this project, causing the theme switch and user button to wrap vertically underneath navigation links.
+  * Solution: Added foundational Neo-Brutalist layout utilities to `index.css` and added explicit rules for `.landing-header`, `.landing-header-right`, and `.landing-quick-nav` with `flex-wrap: nowrap`, ensuring smooth horizontal alignment across screen sizes.
+* **Image 1 Fix (Agentic Chat Internal Reasoning / Execution Feed):**
+  * Root Cause: Legacy `.modern-thought-box` had a dashed pink border (`border: 1.5px dashed var(--accent)`) and `.step-card` had hardcoded dark navy containers (`rgba(15, 23, 42, 0.7)`) with low-contrast slate text that clashed in Sakura light mode.
+  * Solution: Completely redesigned `.modern-thought-box` and `.step-card` (`.step-card-plan`, `.step-card-tool`, `.step-card-obs`, `.step-card-synth`) into crisp Neo-Brutalist cards (`2px solid var(--border-color)`, `box-shadow: 2px 2px 0px var(--shadow-color)`). In Sakura mode, renders with clean `#ffffff` surfaces, solid `#000000` borders, high-contrast monospace badges, and colored left-border indicators (`#0284c7` for Plan, `#d97706` for Tools, `#16a34a` for Synthesis).
+* **Image 2 Fix (Auth & Role Switcher Modal Window):**
+  * Restyled `AuthModal.jsx` with full `.neo-window` padding, `.modal-user-banner`, `.modal-tabs-nav`, and `.modal-role-card` with hover translation physics, active checkmarks, and 2-role selection.
+
+### 5. Verification & Quality Assurance
+* **Unit Tests:** All 26/26 backend unit tests passing in `tests/`.
+* **Vite Production Build:** Compiled successfully with 0 errors in 851ms.
+* **Role Switching API:** Verified live via cURL (`POST /api/auth/switch-role`) for both `user` and `admin`.
+
+---
+
+## Phase 28 Deliverables & Verification Log
+
+### 1. Resilient Dual-Store Architecture & Connection Resolution
+* **Root Cause of ServerSelectionTimeoutError (500 Error on Import / Library):**
+  * When `get_db()` previously attempted connection to `mongodb://localhost:27017` and failed, `_DB` was left assigned to a non-functional client rather than being reset. Subsequent database calls (such as in `get_current_user` or `/api/library/folders`) crashed with unhandled `ServerSelectionTimeoutError`.
+  * The system MongoDB service was installed (`/usr/bin/mongod`) but inactive/dead, and `run.sh` lacked an automated startup probe.
+* **Dual-Store Architecture (`LocalDatabase` in `backend/database/mongodb.py`):**
+  * Created a transparent file-backed local database engine (`LocalDatabase` saving to `data/local_db.json`) implementing standard MongoDB collections (`users`, `folders`, `documents`, `chat_sessions`) with full support for `find_one`, `find` with cursor sorting and limits, `insert_one`, `update_one` (including `$set` and `$push`), `update_many`, `delete_one`, `delete_many`, and `count_documents`.
+  * If MongoDB is online, the backend seamlessly connects to real MongoDB.
+  * If MongoDB is offline, unreachable, or uninstalled, the backend instantly falls back to `LocalDatabase` without throwing timeouts or 500 errors.
+* **Automated Runner Daemon Probe (`run.sh`):**
+  * Added port 27017 socket check to `run.sh`. If inactive and `mongod` is found, automatically forks a local MongoDB instance in `./data/db` with logs in `./data/mongodb.log`.
+  * Automatically issues clean shutdown upon exit (`SIGINT`, `SIGTERM`, `EXIT`).
+
+### 2. Multi-Format Upload Restoration & Pipeline Synchronization
+* **Root Cause of Document Retrieval 404:**
+  * When documents (specifically PDFs) were imported via `/api/library/upload`, `output_image_dir` was not passed to `parser.parse()`, preventing page PNG rasterization.
+  * Furthermore, `session_store.py`'s `get_document(doc_id)` strictly checked for `*.docx` on disk, causing all PDF documents and uncached documents to return 404 Not Found when clicking *Open Workspace & Chat*.
+* **Pipeline Enhancements:**
+  * Upgraded `backend/routes/document_library_routes.py` (`/api/library/upload`) to compile visual page bitmaps to `uploads/renders/{doc_id}/` for both DOCX and PDF formats.
+  * Upgraded `backend/routes/document_routes.py` (`/api/documents/upload`) to support both PDF and DOCX files.
+  * Upgraded `backend/session_store.py` (`get_document`) to look up document metadata in the database, query `uploads/` and `docs/` for both PDF and DOCX formats, parse AST elements, and generate high-resolution raster bitmaps.
+  * Connected chat session persistence in `UnderstandingView.jsx` via `saveChatMessage` on both user questions and assistant answers.
+
+### 3. Duplicate Query Filter Bug Resolution
+* **Duplicate `$or` Key in `document_library_routes.py`:**
+  * Fixed Python dictionary duplicate key collision where `{"$or": [...], "$or": [...]}` overwrote the uncategorized filter with the user filter.
+  * Structured queries using safe `$and` combinations so category filtering, format filtering, and full-text keyword search operate seamlessly together.
+
+### 4. Comprehensive Neo-Brutalist CSS & Utility Additions
+* **Utility Classes in `index.css`:**
+  * Added missing flex and display utilities (`.flex`, `.flex-col`, `.items-center`, `.justify-center`, `.justify-between`, `.flex-1`, `.flex-shrink-0`, `.gap-1`, `.gap-1.5`, `.gap-2`, `.gap-3`, `.gap-4`, `.hidden`, `.relative`, `.inline`, `.cursor-pointer`).
+  * Added text and sizing utilities (`.text-center`, `.text-left`, `.truncate`, `.font-mono`, `.font-bold`, `.font-medium`, `.text-xs`, `.text-sm`, `.text-base`, `.text-lg`, `.text-xl`).
+  * Added spacing classes (`.space-y-2`, `.space-y-3`, `.space-y-4`, `.mr-1`, `.mr-1.5`, `.mr-2`, `.ml-auto`, `.mx-auto`, `.mb-1`, `.mb-2`, `.mb-3`, `.mb-4`, `.mt-1`, `.mt-2`, `.pt-2`, `.py-6`, `.p-8`).
+* **Modal, Form & Component Styling:**
+  * Added `.neo-dropzone`, `.neo-dropzone.has-file`, and `.neo-dropzone.drag-over` with crisp dashed borders, hover physics, and Dark/Sakura theme support.
+  * Added `.color-pick-swatch` with scale and ring indicators on active selection.
+  * Added `.neo-label`, `.neo-alert-box`, `.neo-btn-secondary`, `.neo-avatar`, `.neo-btn-icon-danger`, and `.role-pill` styling.
+  * Resolved input and modal low-contrast visibility in Sakura light theme.
+
+### 5. Verification & Test Results
+* **Backend Unit Tests:** All 26/26 tests passing in `tests/` (`test_agent.py`, `test_execution.py`, `test_models.py`, `test_parser.py`, `test_schema.py`).
+* **API Integration Verification:** Verified end-to-end via FastAPI `TestClient`:
+  * Authentication (Login, Profile, Role Switch between `user` and `admin`): HTTP 200 OK.
+  * Category creation, category listing, document counting: HTTP 200 OK.
+  * PDF Upload & Ingestion: HTTP 200 OK.
+  * Document AST & Page Raster Retrieval (`GET /api/documents/{doc_id}` & `/uploads/renders/...`): HTTP 200 OK (802 KB PNG served).
+  * Document Move between categories: HTTP 200 OK.
+  * Chat session persistence & fetch: HTTP 200 OK.
+  * Offline fallback mode with simulated MongoDB disconnect: HTTP 200 OK.
+* **Frontend Production Build:** `npm run build` compiled cleanly with zero errors in 601ms.
+
+---
+
+## Phase 29 Deliverables & Verification Log
+
+### 1. Header Theme Toggle & Button CSS Restoration
+* **Root Cause of Unstyled `[ Dark | Sakura ]` Buttons:**
+  * In `ThemeToggle.jsx`, the container was tagged with `className="theme-switch"`, while button elements were rendered with `className={theme === 'dark' ? 'active' : ''}` without applying base button classes.
+  * In `index.css`, rules only targeted `.neo-theme-switch` and `.neo-theme-btn`. Because `.theme-switch` and bare `<button>` selectors were missing, the browser defaulted to user-agent raw gray buttons with 3D beveled borders.
+* **Component Architecture Fix (`frontend/src/components/ThemeToggle.jsx`):**
+  * Updated container with composite classes: `className="neo-theme-switch theme-switch"`.
+  * Updated buttons with: `className={`neo-theme-btn theme-switch-btn ${theme === 'dark' ? 'active' : ''}`}` and `theme-icon` SVG classes.
+* **Neo-Brutalist CSS Enhancement (`frontend/src/index.css`):**
+  * Added universal multi-selector styling targeting `.neo-theme-switch`, `.theme-switch`, `div[role="group"][aria-label="Theme switcher"]`, `.neo-theme-btn`, `.theme-switch button`, `.theme-switch-btn`, `#themeDarkBtn`, and `#themeSakuraBtn`.
+  * Preserved crisp neo-brutalist geometry: `font-family: 'Space Mono', monospace; font-size: 0.72rem; font-weight: 700; border: 1.5px solid transparent; border-radius: 0; text-transform: uppercase`.
+  * Enhanced Active state styling:
+    * **Dark Blueprint Mode:** Active button receives neon green background (`var(--accent, #39ff14)`), pitch black text (`#000000`), crisp solid border, and 1px hard shadow.
+    * **Sakura Light Mode:** Active button receives vivid pink background (`var(--accent, #ff5c8a)`), white text (`#ffffff`), 1.5px solid `#000000` border, and 1px `#000000` hard shadow.
+  * Upgraded neighboring `.engine-selector` and `.status-badge-btn` to match the exact 32px height, solid 2px borders, hard drop shadows, and high-contrast colorways across both Dark and Sakura themes.
+
+### 2. Quality Assurance & Build Verification
+* **Frontend Production Build:** `npm run build` compiled cleanly with 0 errors in 748ms.
+* **All modified files staged for review.**
+
+---
+
+## Phase 30 Deliverables & Verification Log
+
+### 1. Header Navigation Bar (Tabs) Neo-Brutalist Reconciliation
+* **Root Cause of Clashing Navbar Pill Design:**
+  * `<nav className="nav-tabs neo-tabs">` contained duplicate, competing CSS definitions:
+    * An earlier `.neo-tabs` block defined sharp, transparent, neo-brutalist buttons.
+    * A later `.nav-tabs` block overrode it with legacy dark pill styling: `background: rgba(15, 23, 42, 0.8); border-radius: var(--radius-full);`.
+    * In Sakura Light mode, this resulted in an awkward dark rounded capsule floating over a white header, with low-contrast dark text inside and a sharp rectangular pink button protruding out.
+* **Architecture & Design Upgrades (`frontend/src/index.css`):**
+  * Consolidated navigation styles under a single authoritative `.nav-tabs, .neo-tabs` block.
+  * Replaced the dark rounded capsule with a crisp Neo-Brutalist segmented control dock:
+    * **Geometry:** `height: 38px; padding: 3px; border: 2px solid var(--border-color); border-radius: 0; box-shadow: 3px 3px 0px var(--shadow-color)`.
+    * **Sakura Light Mode:** Clean white dock background (`#ffffff`), pitch black border (`#000000`), and hard black drop shadow (`3px 3px 0px #000000`).
+    * **Dark Blueprint Mode:** Deep panel background (`#161722`), solid border, and hard shadow.
+  * Enhanced Tab Buttons (`.nav-tab-btn`):
+    * Monospace typography: `font-family: 'Space Mono', monospace; font-size: 0.74rem; font-weight: 700;`.
+    * Inactive tabs feature clear, high-contrast text (`#1a1518` in Sakura, `#dfdfe5` in Dark) with matching icon strokes.
+    * Hover physics: Subtle offset and crisp border outlines.
+    * Active state:
+      * **Dark Mode:** Neon green background (`#39ff14`), black text/icon, solid border, and 2px hard shadow.
+      * **Sakura Light Mode:** Vivid pink background (`#ff5c8a`), crisp white text/icon, solid black border, and 2px `#000000` hard shadow.
+    * Removed legacy duplicate rules in later sections to prevent CSS cascade override bugs.
+
+### 2. Quality Assurance & Build Verification
+* **Frontend Production Build:** `npm run build` compiled cleanly with zero errors in 513ms.
+* **All modified files staged with `git add` for user review.**
+
+---
+
+## Phase 31 Deliverables & Verification Log
+
+### 1. Dual Representation & Grounding Trace Neo-Brutalist Architecture
+* **Root Cause of Clashing Trace Inspector:**
+  * In `AgenticChatSidecar.jsx`, the `.interpretability-accordion` and its inner trace inspector components were hardcoded with dark blueprint values (`#080C16`, `#0E1424`, `rgba(255,255,255,0.06)`).
+  * In Sakura Light mode, this resulted in an awkward pitch-black box inside the chat bubble, washed-out low-contrast white title text (`#E2E8F0` on white), and generic rounded progress meters.
+* **Architecture & Theming Enhancements (`frontend/src/index.css`):**
+  * **Accordion Trigger:**
+    * Styled with full width, high-contrast monospace heading (`color: #000000; font-weight: 800` in Sakura, `#ffffff` in Dark).
+    * `97.9% Fused` joint confidence badge upgraded to high-contrast emerald chip with `1.5px solid #15803d` border and shadow.
+  * **Dual Representation Cards (`.rep-column`):**
+    * In Sakura Light: Pure white card background (`#ffffff`), crisp `2px solid #000000` border, `2px 2px 0px #000000` drop shadow, and zero border-radius.
+    * In Dark Blueprint: `#182038` panel background, crisp `2px solid var(--border-color)` border, and hard shadow.
+  * **Visual Grounding Patch & Action Button:**
+    * Visual crop image wrapper upgraded to crisp high-contrast border and padding.
+    * `Locate on Document Canvas` button redesigned with neo-brutalist solid borders, monospace font, and pink hover state (`#ff5c8a` with white text).
+  * **Structural Node & AST Content Box:**
+    * High-contrast labels (`#6e5c62` in Sakura, `#94a3b8` in Dark) and bold monospace text for element ID (`#paragraph_2_6`) and semantic types (`PARAGRAPH`).
+    * AST Node Content box styled with `#fff8f2` warm panel, `2px solid #000000` border, and dark text.
+  * **Multimodal Fusion Breakdown & Meters:**
+    * Replaced generic rounded pill progress bars with rectangular neo-brutalist meter tracks (`height: 8px; border: 1.5px solid #000000; border-radius: 0; box-shadow: 1px 1px 0px #000000`).
+    * Individual meter fills: Structural (`#6366f1`), Visual (`#10b981`), Joint Multimodal Confidence (`#ff5c8a` in Sakura, `#39ff14` in Dark).
+    * Fusion rationale box upgraded to high-contrast warm card with `4px solid #ff5c8a` left accent border.
+
+### 2. Quality Assurance & Build Verification
+* **Frontend Production Build:** `npm run build` compiled cleanly with zero errors in 566ms.
+* **All modified files staged with `git add` for user review.**
+
+---
+
+## Phase 32 Deliverables & Verification Log
+
+### 1. Full Table Spatial Clustering & Grounding Engine (`backend/routes/intelligence_routes.py`)
+* **Root Cause of Single-Word / Section Crop:**
+  * When asking questions regarding tables or quantitative evaluation metrics (e.g., *"what are the metrics in the table?"*), the dual-representation scorer prioritized the section heading string `"V. RESULT"` ($97.9\%$) over actual table elements.
+  * In addition, unlike figures which had image+caption spatial union logic, tables possessed no spatial clustering logic—falling back to the bounding box of a single row or single word ($53.4 \times 11.1$ pt). This caused the visual crop patch and canvas citation highlight to frame only the word `"RESULT"` rather than the tabular data.
+* **Dual-Representation Priority Scorer Overhaul:**
+  * Updated `score_element_dual_rep`:
+    * When `is_table_query` is True, table captions (e.g. `Table I. Overall pilot metrics`) score $1.00$ structural / $0.98$ visual $\to 0.9865$ fused.
+    * Table header rows score $0.99$ / $0.98 \to 0.9865$, and data rows score $0.98$ / $0.96 \to 0.973$.
+    * Non-table section headings like `"V. RESULT"` are penalized to $0.82$ structural / $0.80$ visual $\to 0.813$, preventing section headers from overtaking table nodes.
+* **Table Composite Bounding Box Helper (`compute_table_composite_bbox`):**
+  * Spatially clusters table captions (`paragraph` containing `"Table [0-9|IVX]+"`), table header rows, and all contiguous data rows (`table_row_\d+_\d+`) on the page into a unified composite bounding box with 5pt padding.
+  * Robustly handles:
+    1. Table row anchor $\to$ matches prefix cluster and discovers adjacent caption above or below.
+    2. Table caption anchor $\to$ discovers adjacent table rows within 60pt vertical threshold.
+    3. Section heading anchor under table query intent $\to$ discovers immediately adjacent table below.
+* **Unified Pipeline Wiring:**
+  * Wired composite table bounding box resolution into:
+    1. `select_candidate_elements_and_crop`: Pre-assigns `composite_bbox` to all table nodes and sets citation tag (e.g. `Page 3, Table I`).
+    2. `run_qa_inference`: Evaluates table query context, expands `candidate_box` to composite table bbox, sets `citation_tag = "Page 3, Table I"`, and marks `structural.type = "table"`.
+    3. `run_qa_inference` (Custom Compact model): Auto-expands target row to full table composite box.
+    4. `stream_qa` / `event_stream`: Detects table queries, clusters composite table bbox, and streams full table grounding in the `done` event.
+
+### 2. Quality Assurance & Verification Log
+* **Pytest Unit Test Suite:** `PYTHONPATH=src .venv/bin/pytest tests/` passed **26/26 tests**.
+* **End-to-End Synchronous Endpoint Verification (`/api/intelligence/qa`):**
+  * Query: *"what are the metrics in the table?"* on `doc_f6d2656d59`
+  * Citation: `Page 3, Table I`
+  * Grounded Bounding Box: `[301.77, 149.63, 558.12, 511.78]` ($256.4 \times 362.1$ pt)
+  * Structural Type: `table`
+  * Crop URL: `/api/documents/doc_f6d2656d59/crop?page_idx=2&bbox=301.77,149.63,558.12,511.78` (200 OK, 108 KB PNG)
+* **End-to-End Streaming Endpoint Verification (`/api/intelligence/qa/stream`):**
+  * Stream `done` event returned:
+    * Citation: `Page 3, Table I`
+    * Bounding Box: `[301.77, 149.63, 558.12, 511.78]` ($256.4 \times 362.1$ pt)
+    * Structural Type: `table`
+* **Frontend Production Build:** `npm run build` compiled cleanly with zero errors in 467ms.
+* **Git Status:** All modified files staged via `git add` for user review (strictly no automatic commits or pushes per rules).
+
+---
+
+## Phase 33 Deliverables & Verification Log
+
+### 1. Mock Document Purge & Library Seeding Overhaul (`backend/database/mongodb.py`)
+* **Mock Influx Root Cause:**
+  * Previously, `init_db()` invoked `_sync_filesystem_documents_to_db`, which aggressively scanned both `uploads/` and `docs/` directories on startup, creating 59 redundant database records with mock titles (e.g. `"LEARNAID – Cognitive Computing Multimodal Learning Support System"`, `"Doc 056732515A Pom Ssa 1.Docx"`, `"Test Final PDF"`, `"Presentation Final PDF"`, `test_export.docx`).
+* **Clean Single-Source Seeding:**
+  * Replaced `_sync_filesystem_documents_to_db` with `_seed_initial_project_document`.
+  * If the database is empty, it registers only the single legitimate Project Paper (`uploads/doc_f6d2656d59_project_paper.docx`) with the title `"Deep Learning System for Multimodal Document Understanding & Grounded Manipulation"`.
+  * Purged all 59 extraneous mock, scratch, and test duplicate records from MongoDB.
+
+### 2. Comprehensive Document Management Lifecycle Suite (`tests/test_library_management.py`)
+* **Implemented Automated Lifecycle Tests covering all Document Library Operations:**
+  1. **Authentication & Profile Verification:** Authenticates as user `saravana` and confirms role permissions (`user`).
+  2. **Folder CRUD Lifecycle:** Creates a custom category (`"Automated Test Category"`), verifies presence in `GET /api/library/folders`, and deletes it with cleanup.
+  3. **Document Ingestion & Multi-Format Parsing:** Uploads a document via `POST /api/library/upload`, verifies `UnifiedDocument` AST parsing and page bitmap rendering, and checks folder assignment.
+  4. **Document Reassignment:** Moves documents between categories and Uncategorized via `POST /api/library/documents/{doc_id}/move`.
+  5. **Metadata Updates & Query Filtering:** Updates title and tags via `PUT /api/library/documents/{doc_id}`; verifies debounced substring search and file type filters.
+  6. **Cascade Deletion & Cleanup:** Deletes document and confirms chat session and disk cleanup.
+
+### 3. Quality Assurance & Verification
+* **Pytest Test Suite:** `PYTHONPATH=src:. .venv/bin/pytest tests/` passed **29/29 tests**.
+* **Frontend Production Build:** `npm run build` compiled cleanly with zero errors in 563ms.
+* **Git Status:** Modified files staged with `git add` for user review.
+
+---
+
+## Phase 34 Deliverables & Verification Log
+
+### 1. Model Migration into Project Directory (`models/qwopus/`)
+* **Relocation of Large Weights:**
+  * Moved the 5.3 GB Claude-distilled Qwopus GGUF model from `/home/saravana/Qwopus3.5-9B-v3.Q4_K_M.gguf` to:
+    `models/qwopus/Qwopus3.5-9B-v3.Q4_K_M.gguf`
+  * Moved the 880 MB multimodal vision projector from `/home/saravana/mmproj.gguf` to:
+    `models/qwopus/mmproj.gguf`
+* **Backwards-Compatible Symlinks:**
+  * Created symbolic links in `/home/saravana/` pointing back to `models/qwopus/`:
+    * `/home/saravana/Qwopus3.5-9B-v3.Q4_K_M.gguf` $\to$ `/home/saravana/projects/final-year-project/models/qwopus/Qwopus3.5-9B-v3.Q4_K_M.gguf`
+    * `/home/saravana/mmproj.gguf` $\to$ `/home/saravana/projects/final-year-project/models/qwopus/mmproj.gguf`
+  * Guarantees zero downtime and 100% compatibility for any existing background scripts or processes.
+* **Documentation & Structure Retention:**
+  * Added [`models/qwopus/README.md`](file:///home/saravana/projects/final-year-project/models/qwopus/README.md) detailing model specs, runtime offload parameters (18 layers on RTX 4050 GPU, 14 on RAM, 8K context), and server launch options.
+  * Added `models/.gitkeep` and `models/qwopus/.gitkeep` so directory structures are tracked in Git.
+
+### 2. Git & Gitignore Hardening
+* **Comprehensive Git Ignore Rules (`.gitignore`):**
+  * Explicitly ignores all `.gguf` binaries (`models/*.gguf`, `models/**/*.gguf`, `*.gguf`) to ensure 6.2 GB weights are never mistakenly committed to version control.
+  * Preserved directory structure tracking via exception patterns (`!models/.gitkeep`, `!models/qwopus/.gitkeep`, `!models/qwopus/README.md`).
+  * Hardened database log patterns (`*.log*`, `data/*.log*`) to cleanly exclude timestamped rotation logs (e.g. `data/mongodb.log.2026-10-22...`).
+
+### 3. Verification & Quality Assurance
+* **Model Server Health Verification:** `curl -s http://127.0.0.1:8085/health` returned `{"status":"ok"}`.
+* **Git Status Verification:** Confirmed `models/qwopus/*.gguf` marked as ignored (`!!`), zero untracked binary files, and all project files cleanly tracked.
+* **Pytest Test Suite:** `PYTHONPATH=src:. .venv/bin/pytest tests/` passed **29/29 tests**.
+* **Frontend Production Build:** `npm run build` compiled cleanly with zero errors in 563ms.
+* **Git Status:** Modified files staged with `git add` for user review (strictly no automatic commits or pushes).
 
 
 

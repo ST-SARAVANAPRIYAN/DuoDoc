@@ -13,11 +13,12 @@ from fastapi import APIRouter, UploadFile, File, HTTPException, Response
 from PIL import Image
 
 from config import UPLOAD_DIR, RENDERS_DIR, FUNSD_DIR, CORPUS_DIR, BASE_DIR
-from parser import DocxDocumentParser
+from parser import DocxDocumentParser, PdfDocumentParser
 from render import render_canvas
 from schema import UnifiedDocument, DocumentPage, DocumentElement
 from schemas import DocumentSummaryDTO, PageDTO, ElementDTO, BenchmarkSampleDTO
 from session_store import store_document, get_document
+from database.mongodb import get_db
 
 logger = logging.getLogger("DocumentRoutes")
 router = APIRouter(prefix="/api/documents", tags=["Documents"])
@@ -26,15 +27,15 @@ router = APIRouter(prefix="/api/documents", tags=["Documents"])
 @router.post("/upload", response_model=DocumentSummaryDTO)
 async def upload_document(file: UploadFile = File(...)):
     """
-    Ingests a native Microsoft Word (.docx) document, compiles high-fidelity visual layouts,
+    Ingests a native Microsoft Word (.docx) or PDF document, compiles high-fidelity visual layouts,
     extracts elements into UnifiedDocument AST, and rasterizes visual page bitmaps.
     """
     filename = file.filename
     ext = os.path.splitext(filename)[1].lower()
-    if ext not in (".docx", ".doc"):
+    if ext not in (".docx", ".doc", ".pdf", ".png", ".jpg", ".jpeg"):
         raise HTTPException(
             status_code=400,
-            detail=f"Unsupported format '{ext}'. The system is configured strictly for Microsoft Word (.docx) documents."
+            detail=f"Unsupported format '{ext}'. Upload Microsoft Word (.docx) or PDF documents."
         )
 
     doc_id = f"doc_{uuid.uuid4().hex[:10]}"
@@ -48,8 +49,12 @@ async def upload_document(file: UploadFile = File(...)):
     os.makedirs(doc_renders_dir, exist_ok=True)
 
     try:
-        parser = DocxDocumentParser(render_dpi=150)
-        unified_doc = parser.parse(str(dest_path), output_image_dir=str(doc_renders_dir))
+        if ext in (".docx", ".doc"):
+            parser = DocxDocumentParser(render_dpi=150)
+            unified_doc = parser.parse(str(dest_path), output_image_dir=str(doc_renders_dir))
+        else:
+            parser = PdfDocumentParser(render_dpi=150)
+            unified_doc = parser.parse(str(dest_path), output_image_dir=str(doc_renders_dir))
 
         # Ensure every page has a raster bitmap path
         for p_idx, page in enumerate(unified_doc.pages):
@@ -61,6 +66,28 @@ async def upload_document(file: UploadFile = File(...)):
 
         unified_doc.document_id = doc_id
         store_document(doc_id, unified_doc)
+
+        # Register in database if available
+        try:
+            db = get_db()
+            if db is not None:
+                db["documents"].insert_one({
+                    "document_id": doc_id,
+                    "owner_id": "system",
+                    "folder_id": None,
+                    "title": filename.replace("-", " ").replace("_", " ").title(),
+                    "filename": filename,
+                    "file_type": ext.replace(".", ""),
+                    "file_path": str(dest_path),
+                    "file_size": os.path.getsize(dest_path),
+                    "page_count": len(unified_doc.pages),
+                    "tags": [ext.replace(".", ""), "workspace-upload"],
+                    "status": "ready",
+                    "uploaded_at": os.path.getctime(dest_path),
+                    "last_opened_at": os.path.getctime(dest_path)
+                })
+        except Exception:
+            pass
 
         pages_dto = []
         for p in unified_doc.pages:

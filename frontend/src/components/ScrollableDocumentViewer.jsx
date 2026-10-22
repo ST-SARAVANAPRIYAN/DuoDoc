@@ -205,7 +205,16 @@ const ScrollableDocumentViewer = forwardRef(function ScrollableDocumentViewer(
   const totalPages = pages.length;
 
   return (
-    <div className="scrollable-doc-viewer" ref={containerRef}>
+    <div className="scrollable-doc-viewer neo-window" ref={containerRef}>
+      <div className="neo-window-header">
+        <div className="neo-window-dots">
+          <span className="dot-red" />
+          <span className="dot-yellow" />
+          <span className="dot-green" />
+        </div>
+        <span className="neo-window-title font-mono">document.canvas</span>
+      </div>
+
       {/* Top Toolbar */}
       <div className="viewer-toolbar">
         <div className="toolbar-left">

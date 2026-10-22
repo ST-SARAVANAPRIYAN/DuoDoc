@@ -49,31 +49,60 @@ def get_document(doc_id: str) -> Optional[UnifiedDocument]:
     if doc_id in DOCUMENTS:
         return DOCUMENTS[doc_id]
 
-    # Attempt restoration from uploads/ directory if previously ingested
+    # Attempt restoration from uploads/ directory, docs/ directory, or database record
     try:
         from config import UPLOAD_DIR, RENDERS_DIR
-        from parser import DocxDocumentParser
+        from parser import DocxDocumentParser, PdfDocumentParser
         from render import render_canvas
+        from database.mongodb import get_db
 
-        matching_files = list(UPLOAD_DIR.glob(f"{doc_id}_*.docx"))
-        if not matching_files:
-            matching_files = list(UPLOAD_DIR.glob(f"*{doc_id}*.docx"))
+        file_path = None
+        # 1. Check database if available
+        try:
+            db = get_db()
+            if db is not None:
+                doc_record = db["documents"].find_one({"document_id": doc_id})
+                if doc_record and doc_record.get("file_path") and os.path.exists(doc_record["file_path"]):
+                    file_path = Path(doc_record["file_path"])
+        except Exception:
+            pass
 
-        if matching_files:
-            docx_path = matching_files[0]
+        # 2. Search uploads/ directory
+        if not file_path:
+            for pattern in (f"{doc_id}_*.*", f"*{doc_id}*.*"):
+                matches = [f for f in UPLOAD_DIR.glob(pattern) if f.suffix.lower() in (".docx", ".pdf", ".png", ".jpg", ".jpeg")]
+                if matches:
+                    file_path = matches[0]
+                    break
+
+        # 3. Search docs/ directory
+        if not file_path:
+            for f in Path("docs").glob("*.*"):
+                if f.stem == doc_id or doc_id in f.name:
+                    file_path = f
+                    break
+
+        if file_path and file_path.exists():
             doc_renders_dir = RENDERS_DIR / doc_id
             os.makedirs(doc_renders_dir, exist_ok=True)
-            parser = DocxDocumentParser(render_dpi=150)
-            doc = parser.parse(str(docx_path), output_image_dir=str(doc_renders_dir))
+            ext = file_path.suffix.lower()
+            if ext in (".docx", ".doc"):
+                parser = DocxDocumentParser(render_dpi=150)
+                doc = parser.parse(str(file_path), output_image_dir=str(doc_renders_dir))
+            else:
+                parser = PdfDocumentParser(render_dpi=150)
+                doc = parser.parse(str(file_path), output_image_dir=str(doc_renders_dir))
+
             for p_idx, page in enumerate(doc.pages):
                 if not page.image_path or not os.path.exists(page.image_path):
                     img = render_canvas(doc, page_id=p_idx)
                     img_path = doc_renders_dir / f"page_{p_idx}.png"
                     img.save(img_path)
                     page.image_path = str(img_path)
+
             doc.document_id = doc_id
             DOCUMENTS[doc_id] = doc
-            logger.info(f"Auto-restored document {doc_id} from {docx_path.name}")
+            logger.info(f"Auto-restored document {doc_id} from {file_path.name}")
             return doc
     except Exception as e:
         logger.warning(f"Could not auto-restore document '{doc_id}': {e}")

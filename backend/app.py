@@ -29,6 +29,9 @@ from routes.system_routes import router as system_router
 from routes.document_routes import router as document_router
 from routes.intelligence_routes import router as intelligence_router
 from routes.export_routes import router as export_router
+from routes.auth_routes import router as auth_router
+from routes.document_library_routes import router as library_router
+from database.mongodb import init_db
 
 app = FastAPI(
     title="IntelliDoc Intelligence API",
@@ -51,9 +54,19 @@ app.mount("/uploads", StaticFiles(directory=str(UPLOAD_DIR)), name="uploads")
 
 # Include Routers
 app.include_router(system_router)
+app.include_router(auth_router)
+app.include_router(library_router)
 app.include_router(document_router)
 app.include_router(intelligence_router)
 app.include_router(export_router)
+
+
+@app.on_event("startup")
+def startup_event():
+    try:
+        init_db()
+    except Exception as e:
+        print(f"Startup MongoDB initialization warning: {e}")
 
 
 @app.get("/")

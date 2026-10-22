@@ -63,10 +63,26 @@ uploads/*
 data/renders/*
 !data/renders/.gitkeep
 
+# Database
+data/mongodb/
+data/db/
+data/local_db.json
+*.log*
+data/*.log*
+
 # Checkpoint model weights (keep configs and README)
 checkpoints/*.pt
 checkpoints/*.bin
 checkpoints/*.safetensors
 
+# Large Model Weights & GGUF binaries (keep directory structure via README/.gitkeep)
+models/*.gguf
+models/**/*.gguf
+*.gguf
+!models/.gitkeep
+!models/qwopus/.gitkeep
+!models/qwopus/README.md
+
 # Temporary scratch scripts
 scratch/
+
