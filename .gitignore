@@ -50,6 +50,7 @@ backup/
 *.swp
 *.swo
 *~
+.~lock.*#
 .DS_Store
 Thumbs.db
 __MACOSX/
