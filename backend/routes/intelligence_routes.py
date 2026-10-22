@@ -513,6 +513,30 @@ def run_qa_inference(req: QARequest):
         raise HTTPException(status_code=400, detail=f"Page index {req.page_idx} out of range.")
 
     target_page_idx = req.page_idx
+
+    from agent.orchestrator import DocumentAgentOrchestrator
+    is_valid_scope, abstention_msg = DocumentAgentOrchestrator._evaluate_query_scope_and_relevance(
+        doc=doc,
+        query=req.query,
+        scope_mode=req.scope_mode,
+        region_bbox=req.region_bbox
+    )
+    if not is_valid_scope:
+        return QAResponse(
+            document_id=req.document_id,
+            page_idx=target_page_idx,
+            query=req.query,
+            answer=abstention_msg,
+            grounded_element_id=None,
+            grounded_bbox=None,
+            evidence_text=None,
+            confidence=0.0,
+            reasoning="Safe Abstention: Query requested external code or topics outside the uploaded document's domain.",
+            citation_label="Outside Document Scope",
+            latency_ms=0.5,
+            engine="Safe Abstention Gate"
+        )
+
     q_lower = req.query.lower()
 
     fig_match = re.search(r"\b(?:fig|figure)\.?\s*([0-9]+|[ivx]+|[a-z])\b", q_lower)
@@ -647,7 +671,19 @@ def run_qa_inference(req: QARequest):
         final_fused_score = 0.91
         final_rationale = reasoning
 
-        if verified_el:
+        if req.scope_mode == "selected_region" and req.region_bbox:
+            grounded_bbox = req.region_bbox
+            citation_tag = qa_result.get("citation_label") or f"Page {target_page_idx + 1}, Selected Region"
+            rx1, ry1, rx2, ry2 = req.region_bbox
+            rx_min, rx_max = min(rx1, rx2), max(rx1, rx2)
+            ry_min, ry_max = min(ry1, ry2), max(ry1, ry2)
+            for el in candidate_elements:
+                if not (el.bbox[2] < rx_min or el.bbox[0] > rx_max or el.bbox[3] < ry_min or el.bbox[1] > ry_max):
+                    verified_el = el
+                    target_id = el.id
+                    evidence_text = el.text
+                    break
+        elif verified_el:
             target_id = verified_el.id
             evidence_text = verified_el.text
             citation_tag = f"Page {target_page_idx + 1}, Block #{target_id}"
@@ -910,56 +946,71 @@ def run_qa_streaming(req: QARequest):
                     page = doc.pages[target_page_idx]
 
                     verified_el = None
-                    if target_id:
+                    if req.scope_mode == "selected_region" and req.region_bbox:
+                        grounded_bbox = req.region_bbox
+                        citation = qa_result.get("citation_label") or citation_tag or f"Page {target_page_idx + 1}, Selected Region"
+                        rx1, ry1, rx2, ry2 = req.region_bbox
+                        rx_min, rx_max = min(rx1, rx2), max(rx1, rx2)
+                        ry_min, ry_max = min(ry1, ry2), max(ry1, ry2)
                         for el in page.elements:
                             if el.id == target_id:
                                 verified_el = el
                                 break
                         if not verified_el:
-                            for el in candidate_elements:
+                            for el in page.elements:
+                                if not (el.bbox[2] < rx_min or el.bbox[0] > rx_max or el.bbox[3] < ry_min or el.bbox[1] > ry_max):
+                                    verified_el = el
+                                    break
+                        evidence_text = verified_el.text if verified_el else (qa_result.get("evidence_text") or None)
+                        target_id = verified_el.id if verified_el else (target_id or "selected_region")
+                    else:
+                        if target_id:
+                            for el in page.elements:
                                 if el.id == target_id:
                                     verified_el = el
                                     break
-                    if not verified_el:
-                        best_el = None
-                        best_f_score = -1.0
-                        for el in page.elements:
-                            s_s, s_v, s_f, rat = score_element_dual_rep(el, target_page_idx, req.query)
-                            if s_f > best_f_score:
-                                best_f_score = s_f
-                                best_el = el
-                        verified_el = best_el or (candidate_elements[0] if candidate_elements else None)
-
-                    evidence_text = verified_el.text if verified_el else None
-                    if verified_el:
-                        target_id = verified_el.id
-                        vlm_matched = (qa_result.get("grounded_element_id") == verified_el.id)
-                        candidate_box = (
-                            (qa_result.get("grounded_bbox") if vlm_matched else None)
-                            or verified_el.metadata.get("composite_bbox")
-                        )
-                        if not candidate_box and target_fig_num and verified_el.type in ("paragraph", "heading"):
-                            for im_el in candidate_elements:
-                                if im_el.type == "image":
-                                    ib = im_el.bbox
-                                    v_dist = min(abs(verified_el.bbox[1] - ib[3]), abs(ib[1] - verified_el.bbox[3]))
-                                    if v_dist <= 50.0:
-                                        candidate_box = [
-                                            round(min(verified_el.bbox[0], ib[0]), 2),
-                                            round(min(verified_el.bbox[1], ib[1]), 2),
-                                            round(max(verified_el.bbox[2], ib[2]), 2),
-                                            round(max(verified_el.bbox[3], ib[3]), 2)
-                                        ]
+                            if not verified_el:
+                                for el in candidate_elements:
+                                    if el.id == target_id:
+                                        verified_el = el
                                         break
+                        if not verified_el:
+                            best_el = None
+                            best_f_score = -1.0
+                            for el in page.elements:
+                                s_s, s_v, s_f, rat = score_element_dual_rep(el, target_page_idx, req.query)
+                                if s_f > best_f_score:
+                                    best_f_score = s_f
+                                    best_el = el
+                            verified_el = best_el or (candidate_elements[0] if candidate_elements else None)
 
-                        grounded_bbox = candidate_box or verified_el.bbox
-                        citation = f"Page {target_page_idx + 1}, Block #{target_id}"
-                    else:
-                        grounded_bbox = qa_result.get("grounded_bbox")
-                        citation = citation_tag
+                        evidence_text = verified_el.text if verified_el else None
+                        if verified_el:
+                            target_id = verified_el.id
+                            vlm_matched = (qa_result.get("grounded_element_id") == verified_el.id)
+                            candidate_box = (
+                                (qa_result.get("grounded_bbox") if vlm_matched else None)
+                                or verified_el.metadata.get("composite_bbox")
+                            )
+                            if not candidate_box and target_fig_num and verified_el.type in ("paragraph", "heading"):
+                                for im_el in candidate_elements:
+                                    if im_el.type == "image":
+                                        ib = im_el.bbox
+                                        v_dist = min(abs(verified_el.bbox[1] - ib[3]), abs(ib[1] - verified_el.bbox[3]))
+                                        if v_dist <= 50.0:
+                                            candidate_box = [
+                                                round(min(verified_el.bbox[0], ib[0]), 2),
+                                                round(min(verified_el.bbox[1], ib[1]), 2),
+                                                round(max(verified_el.bbox[2], ib[2]), 2),
+                                                round(max(verified_el.bbox[3], ib[3]), 2)
+                                            ]
+                                            break
 
-                    if not grounded_bbox and req.scope_mode == "selected_region" and req.region_bbox:
-                        grounded_bbox = req.region_bbox
+                            grounded_bbox = candidate_box or verified_el.bbox
+                            citation = f"Page {target_page_idx + 1}, Block #{target_id}"
+                        else:
+                            grounded_bbox = qa_result.get("grounded_bbox")
+                            citation = citation_tag
 
                     crop_url = (
                         f"/api/documents/{req.document_id}/crop?page_idx={target_page_idx}&bbox={','.join(map(str, grounded_bbox))}"

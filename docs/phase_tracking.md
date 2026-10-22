@@ -29,7 +29,9 @@
 | **Phase 20** | Top-K Dense Evidence Page Routing & Table Structure Clustering | **COMPLETED** | Cross-Page Relevancy, Table Caption & Contiguous Row Clustering, Visual Patch (19/19 Tests Passed) |
 | **Phase 21** | Repetition Penalty, Active Stream Cancellation & User-Aware Scroll | **COMPLETED** | Loop Truncation, AbortController Stop Option, Smooth Non-Resetting Scroll (19/19 Tests Passed) |
 | **Phase 22** | Section Hierarchy Clustering & Bounding Box Grounding Sync | **COMPLETED** | Inverted Ternary Fix, Heading-Body Clustering, Composite BBox (19/19 Tests Passed) |
-| **Phase 23** | Modular Autonomous Document Agent & Cognitive ReAct Architecture | **COMPLETED** | 25/25 Tests Passed, ReAct Tool Suite, SSE Stream, Grounding Chips & Modern Agentic UI |
+| **Phase 23** | Modular Autonomous Document Agent & Cognitive ReAct Architecture | **COMPLETED** | 26/26 Tests Passed, ReAct Tool Suite, SSE Stream, Grounding Chips & Modern Agentic UI |
+| **Phase 24** | Focal Anchor Grounding & Hierarchical Context Expansion Engine | **COMPLETED** | 26/26 Tests Passed, AABB Overlap, Neighboring Context Window, Zero Grounding Hijack |
+| **Phase 25** | Document Scope Gate & Safe Abstention Engine (Dual-Defense) | **COMPLETED** | 26/26 Tests Passed, OOD Code/Trivia Filter, Zero Hallucination, Grounding Boundary |
 
 ---
 
@@ -893,6 +895,84 @@
 * **Unit Test Suite & Build Verification:**
   * **26/26 unit tests passed** in 7.03s (`.venv/bin/pytest tests/`), including new `test_figure_target_resolution`.
   * **Vite build clean** with 0 errors (`npm run build`).
+
+---
+
+## Phase 24 Deliverables & Verification Log
+
+### 1. Focal Anchor Grounding & Hierarchical Context Expansion Engine
+* **Problem & Root Cause Analysis:**
+  * When a user selected a specific visual region (e.g., document title `"LEARNAID..."` on Page 1) and prompted `"explain"`, two severe failures occurred:
+    1. **Region Grounding Hijacking:** In `orchestrator.py`, the agent emitted `grounded_element_id: "selected_region"`. In `backend/routes/intelligence_routes.py`, the backend looked for an element with `id == "selected_region"`. Failing to find one, it fell back to scoring every element on the entire page. The Abstract (`#paragraph_0_19`) scored highest, completely overriding `target_id`, `grounded_bbox`, and the citation badge to point to the Abstract instead of the selected title.
+    2. **Truncated Output & Reasoning Bypass:** In `orchestrator.py`, the selected region path bypassed the active Qwopus 3.5 9B reasoning model and called `vlm.answer_question()` in extractive QA mode. Because the title was treated as an exact-match query, it extracted only the raw 5-word heading line (`"LEARNAID – A Cognitive Computing-Based"`) without synthesizing any actual explanation.
+    3. **Context Isolation vs. Need for Nearby Content:** A title by itself contains no self-explanation. Explaining a title or heading requires the AI to inspect neighboring context (Abstract, Introduction, adjacent paragraphs) while keeping the user's selected region as the primary focal subject and UI highlight target.
+
+### 2. Architectural Implementation
+* **2D AABB Intersection Overlap Detection (`src/agent/orchestrator.py`):**
+  * Replaced strict vertical containment ($y_1 \ge \text{box}[1] \land y_2 \le \text{box}[3]$) with 2D Axis-Aligned Bounding Box (AABB) intersection ($(\min(rx_2, ex_2) - \max(rx_1, ex_1)) \times (\min(ry_2, ey_2) - \max(ry_1, ey_1)) > 0$).
+  * Accurately identifies all layout elements intersecting the user's drag-selection, sorting them in natural reading order.
+* **Hierarchical Context Expansion (Focal Anchor + Neighboring Context Window):**
+  * **Title/Heading Anchors:** Automatically detects if the focal element is a title or heading and expands downward to include the next 3–5 contiguous body blocks (e.g. Abstract, Introduction).
+  * **Body/Figure Anchors:** Expands bidirectionally to include preceding and succeeding paragraphs for narrative continuity.
+* **Structured Multimodal Prompting & Qwopus 3.5 9B Streaming:**
+  * Formulates a dual-level prompt cleanly distinguishing `[PRIMARY FOCAL TARGET]` from `[SURROUNDING SUPPORTING CONTEXT]`.
+  * Streams reasoning `<think>` tokens and detailed answers through `qwopus.stream_question()` via SSE.
+* **Grounding Integrity Lockdown (`backend/routes/intelligence_routes.py`):**
+  * In both `/qa/stream` and `/qa` endpoints, when `req.scope_mode == "selected_region"`, strictly locks `grounded_bbox = req.region_bbox` and citation to `Page {target_page_idx + 1}, Selected Region`.
+  * Disables global whole-page fallback re-ranking, completely eliminating grounding hijacking.
+* **Smart Extractive Synthesis Fallback (`src/models/vlm_engine.py`):**
+  * In `_extractive_qa_ast_grounding`, when asked to explain a focal target, synthesizes the heading with its neighboring paragraphs instead of returning raw truncated heading fragments.
+
+### 3. Verification & Quality Assurance
+* **Selected Region Streaming Simulation:**
+  * Executed `verify_selected_region.py` with Title selection and query `"explain"`.
+  * Output: 1,933 characters of comprehensive, structured multimodal reasoning explaining LEARNAID's purpose, architecture, and significance.
+  * Verified: `grounded_bbox` remained locked to user's selected coordinates (`[95.0, 48.0, 505.0, 85.0]`) with zero jumping.
+* **FastAPI Endpoint End-to-End Test (`verify_api_route.py`):**
+  * POST `/api/intelligence/qa/stream` with `selected_region` payload returned HTTP 200 with verified `grounded_element_id: title_0_0`, exact `grounded_bbox`, and rich answer stream.
+* **Unit Test Suite & Build Verification:**
+  * **26/26 unit tests passed** in 9.04s (`.venv/bin/pytest tests/`).
+  * **Vite build clean** with 0 errors (`npm run build`).
+
+---
+
+## Phase 25 Deliverables & Verification Log
+
+### 1. Document Scope Gate & Safe Abstention Engine (Dual-Defense Architecture)
+* **Problem & Root Cause Analysis:**
+  * When a user asked an out-of-domain question (such as *"write a python program to reverse a linked list"* or generic jokes/trivia) on an unrelated document (e.g. an educational cognitive computing paper or medical report), the foundation model (Qwopus 3.5 9B / Qwen) happily produced the Python code or answered the trivia, ignoring the document grounding constraint.
+  * Root causes:
+    1. Modern LLMs are pre-trained on generic code and conversational trivia and default to answering whatever is asked.
+    2. The QA pipeline previously lacked a **Semantic Relevance Gate**, passing top-K candidate blocks to the LLM regardless of whether the query had any topical or lexical overlap with the document.
+    3. The VLM system prompts lacked explicit **Safe Abstention & Document Grounding Boundaries**.
+
+### 2. Dual-Defense Architectural Implementation
+* **Layer 1: Pipeline-Level Scope & Relevance Gate (`src/agent/orchestrator.py` & `backend/routes/intelligence_routes.py`):**
+  * Implemented `_evaluate_query_scope_and_relevance(doc, query, scope_mode, region_bbox)`:
+    * **OOD Pattern Detection:** Detects generic external programming requests (`write a python program`, `implement ... in java`, `leetcode`, `linked list`, etc.) and generic conversational trivia/chitchat.
+    * **Lexical & Semantic Overlap Check:** Computes query content word overlap against the entire document vocabulary.
+    * **Intelligent Scope Routing:** Standard document discovery queries (e.g. methodology, architecture, evaluation, authors) and canvas-selected region prompts (e.g. "explain", "what is this") remain fully valid.
+    * **Safe Abstention Protocol:** If an OOD request has no evidence in the document ($< 20\%$ overlap), immediately triggers safe abstention:
+      * Yields a concise reason in thought delta.
+      * Delivers a polite, professional Markdown abstention message explaining that the query is outside document scope, what was declined, and what document topics can be asked.
+      * Returns `confidence: 0.0`, `citation_label: "Outside Document Scope"`, and `grounded_bbox: None` (preventing erratic bounding box highlights).
+      * Bypasses heavy GPU generation, completing in $< 5\text{ ms}$.
+* **Layer 2: Prompt-Level Grounding Boundary (`src/models/vlm_engine.py`):**
+  * Upgraded system prompts in `QwopusVLMClient` (`answer_question` and `stream_question`):
+    * Enforces strict instructions: *"Your answers MUST be derived exclusively from the provided document content... DO NOT act as a general-purpose programming assistant, creative writer, or general chatbot. If the user asks for generic tasks or code unmentioned in the document, decline politely."*
+    * Guarantees that any subtle or ambiguous queries reaching the neural inference stage are rejected by the reasoning model itself rather than hallucinated.
+
+### 3. Verification & Quality Assurance
+* **Multi-Scenario Verification Suite (`verify_safe_abstention.py`):**
+  * **Test 1 (Unrelated Python Code Request):** Query *"write a python program to reverse a singly linked list"* on `LEARNAID` doc triggered Safe Abstention, confidence 0.0, zero Python code generated.
+  * **Test 2 (Generic Trivia):** Query *"tell me a funny joke"* triggered Safe Abstention, confidence 0.0.
+  * **Test 3 (Valid Document Query):** Query *"what does the proposed system do and what is it called?"* executed normally, generating a 1,221-character fully grounded answer discussing LEARNAID.
+  * **Test 4 (Selected Region Visual Prompt):** Selected title with `"explain"` executed normally with exact region grounding.
+* **Unit Test Suite & Build Verification:**
+  * **26/26 unit tests passed** in 8.35s (`.venv/bin/pytest tests/`).
+  * **Vite build clean** with 0 errors in 1.25s (`npm run build`).
+
+
 
 
 

@@ -9,7 +9,7 @@ import re
 import json
 import time
 import logging
-from typing import Dict, Any, List, Optional, Generator
+from typing import Dict, Any, List, Optional, Generator, Tuple
 from PIL import Image
 
 from schema import UnifiedDocument, DocumentElement
@@ -247,6 +247,109 @@ class DocumentAgentOrchestrator:
             "rationale": f"Scanning document elements for query: '{query}'."
         }
 
+    @staticmethod
+    def _evaluate_query_scope_and_relevance(
+        doc: UnifiedDocument,
+        query: str,
+        scope_mode: str = "whole_doc",
+        region_bbox: Optional[List[float]] = None
+    ) -> Tuple[bool, str]:
+        """
+        Evaluates whether user query is within the document's domain/content scope.
+        Returns:
+            (is_valid_scope, abstention_message)
+        """
+        q_lower = query.lower().strip()
+
+        # Extract underlying user question if wrapped in [Focus Passage]: ...
+        if "[Focus Passage]:" in query:
+            parts = query.split("Question:", 1)
+            if len(parts) == 2:
+                q_lower = parts[1].lower().strip()
+
+        # In selected_region mode with generic explanation prompts (e.g. "explain", "what is this", "summarize"):
+        # The user is pointing at a visual artifact on the canvas -> inherently valid.
+        is_generic_visual_prompt = any(q_lower == p or q_lower.startswith(p + " ") for p in [
+            "explain", "what is this", "describe", "summarize", "overview", "what does this mean",
+            "detail", "clarify", "elaborate", "analyze"
+        ])
+        if scope_mode == "selected_region" and is_generic_visual_prompt:
+            return True, ""
+
+        # 1. Identify Out-of-Domain (OOD) query patterns (Generic code gen, creative writing, external trivia)
+        ood_code_patterns = [
+            r"\bwrite\s+(?:a\s+)?(?:python|java|c\+\+|javascript|js|typescript|go|rust|c#|sql|bash|ruby|php|html|css)\s+(?:program|script|code|function|app|class|algorithm)\b",
+            r"\b(?:create|implement|give\s+me)\s+(?:a\s+)?(?:python|java|c\+\+|javascript|code)\b",
+            r"\bcode\s+(?:for|to)\s+(?:reverse|sort|solve|calculate|scrape|hack|build)\b",
+            r"\bleetcode\b",
+            r"\b(?:binary\s+search|linked\s+list|bubble\s+sort|fibonacci|palindrome|two\s+sum)\b"
+        ]
+        ood_trivia_patterns = [
+            r"\b(?:tell\s+me\s+a\s+joke|write\s+(?:a\s+)?(?:poem|story|song|joke)|sing\s+a\s+song)\b",
+            r"\b(?:who\s+is\s+the\s+president\s+of|capital\s+of\s+[a-z]+|weather\s+in\s+[a-z]+)\b",
+            r"\b(?:how\s+to\s+cook|recipe\s+for|cheat\s+code)\b"
+        ]
+
+        is_ood_request = any(re.search(pat, q_lower) for pat in (ood_code_patterns + ood_trivia_patterns))
+
+        # Check document text content across all pages
+        doc_words = set()
+        for p in doc.pages:
+            for el in p.elements:
+                if el.text:
+                    for w in re.findall(r"\b[a-zA-Z0-9_-]+\b", el.text.lower()):
+                        if len(w) > 2:
+                            doc_words.add(w)
+
+        # Content words in user query
+        stopwords = {
+            "what", "is", "the", "for", "in", "this", "that", "of", "and", "a", "an", "who", "where", "how",
+            "to", "find", "show", "tell", "me", "from", "with", "about", "does", "which", "paper", "document",
+            "explain", "describe", "detail", "write", "program", "code", "create", "make", "can", "you", "please"
+        }
+        query_content_words = [w for w in re.findall(r"\b[a-zA-Z0-9_-]+\b", q_lower) if w not in stopwords and len(w) > 2]
+
+        # Calculate lexical overlap with document vocabulary
+        matched_words = [w for w in query_content_words if w in doc_words]
+        overlap_ratio = len(matched_words) / max(len(query_content_words), 1)
+
+        # Standard document exploration queries are always permitted if any doc keyword matches
+        doc_intent_keywords = [
+            "abstract", "introduction", "conclusion", "methodology", "architecture", "system",
+            "framework", "result", "results", "table", "figure", "fig", "accuracy", "evaluation",
+            "metric", "author", "authors", "contribution", "contributions", "proposed", "proposal",
+            "limitation", "limitations", "dataset", "datasets", "benchmark", "summary", "overview"
+        ]
+        has_doc_intent = any(k in q_lower for k in doc_intent_keywords)
+
+        # Trigger Safe Abstention:
+        # Case A: Explicit OOD pattern AND the document does not contain the specific requested concepts
+        # Case B: Zero overlap ratio on generic prompts without document intent
+        if is_ood_request:
+            if len(matched_words) == 0 or overlap_ratio < 0.20:
+                abstention_msg = (
+                    "### ⚠️ Query Outside Document Scope\n\n"
+                    "I am a specialized **Multimodal Document Understanding Assistant**. "
+                    "My role is strictly to analyze, explain, and ground information directly from your uploaded document.\n\n"
+                    "- **Why was this request declined?** Your request (e.g. generic programming script, unrelated algorithm, or external topic) "
+                    "is not discussed or evidenced anywhere in this document.\n"
+                    "- **What you can ask instead:**\n"
+                    "  - Inquire about the document's proposed methodology, system architecture, or core contributions.\n"
+                    "  - Ask about experimental evaluation metrics, figures, charts, and tables.\n"
+                    "  - Select any region or diagram on the canvas and ask for a detailed visual and semantic explanation."
+                )
+                return False, abstention_msg
+
+        if not has_doc_intent and query_content_words and len(matched_words) == 0:
+            abstention_msg = (
+                "### ⚠️ No Relevant Evidence Found in Document\n\n"
+                "The requested topic has no relevant textual or visual evidence within this document.\n\n"
+                "Please verify that your question relates to the content, figures, or data presented in the uploaded file."
+            )
+            return False, abstention_msg
+
+        return True, ""
+
     def stream_agent_execution(
         self,
         doc: UnifiedDocument,
@@ -267,7 +370,40 @@ class DocumentAgentOrchestrator:
         start_time = time.perf_counter()
         qwopus = get_qwopus_client_instance()
 
-        # Step 0: Fast path for explicit user-selected region
+        # Step -0.5: Safe Abstention & Document Domain Boundary Gate
+        is_valid_scope, abstention_msg = self._evaluate_query_scope_and_relevance(
+            doc=doc,
+            query=query,
+            scope_mode=scope_mode,
+            region_bbox=region_bbox
+        )
+        if not is_valid_scope:
+            yield {
+                "type": "thought_delta",
+                "delta": "⚠️ Document Scope Gate: Evaluating query against document AST evidence... Query is outside the document's operational domain.\nExecuting Safe Abstention Protocol.\n\n"
+            }
+            for token in abstention_msg.split(" "):
+                yield {"type": "answer_delta", "delta": token + " "}
+                time.sleep(0.01)
+
+            latency = (time.perf_counter() - start_time) * 1000.0
+            yield {
+                "type": "done",
+                "result": {
+                    "answer": abstention_msg,
+                    "grounded_element_id": None,
+                    "grounded_bbox": None,
+                    "page_idx": target_page_idx,
+                    "confidence": 0.0,
+                    "reasoning": "Safe Abstention: Query requested external code or topics outside the uploaded document's domain.",
+                    "citation_label": "Outside Document Scope",
+                    "latency_ms": round(latency, 2),
+                    "engine": "Autonomous Document Agent (Safe Abstention Gate)"
+                }
+            }
+            return
+
+        # Step 0: Fast path for explicit user-selected region with hierarchical context expansion
         if scope_mode == "selected_region" and region_bbox:
             yield {"type": "thought_delta", "delta": f"Inspecting user-selected region on Page {target_page_idx + 1}...\n\n"}
             tool_res = self.registry.execute_tool(
@@ -283,30 +419,164 @@ class DocumentAgentOrchestrator:
                 "output": tool_res.output
             }
 
-            # Ground directly to selected region with guaranteed PIL Image
-            vlm = get_vlm_engine_instance()
             p = doc.pages[target_page_idx] if 0 <= target_page_idx < len(doc.pages) else doc.pages[0]
             cropped_img = tool_res.metadata.get("cropped_image") or self._get_page_image(doc, target_page_idx)
-            qa_res = vlm.answer_question(
-                image=cropped_img,
-                elements=[el for el in p.elements if el.bbox[1] >= region_bbox[1] and el.bbox[3] <= region_bbox[3]],
-                question=query
+
+            rx1, ry1, rx2, ry2 = region_bbox
+            rx_min, rx_max = min(rx1, rx2), max(rx1, rx2)
+            ry_min, ry_max = min(ry1, ry2), max(ry1, ry2)
+
+            # 1. Identify Focal Elements using 2D AABB Intersection
+            focal_elements = []
+            for el in p.elements:
+                ex1, ey1, ex2, ey2 = el.bbox
+                inter_w = max(0.0, min(rx_max, ex2) - max(rx_min, ex1))
+                inter_h = max(0.0, min(ry_max, ey2) - max(ry_min, ey1))
+                inter_area = inter_w * inter_h
+                el_area = max(1.0, (ex2 - ex1) * (ey2 - ey1))
+                if inter_area > 0 and (inter_area / el_area >= 0.15 or inter_area >= 40.0 or (ey2 >= ry_min and ey1 <= ry_max and ex2 >= rx_min and ex1 <= rx_max)):
+                    focal_elements.append(el)
+
+            focal_elements.sort(key=lambda el: (el.bbox[1], el.bbox[0]))
+
+            # 2. Intelligent Context Expansion: Focal Anchor + Neighboring Context Window
+            sorted_page_elements = sorted(p.elements, key=lambda el: (el.bbox[1], el.bbox[0]))
+            supporting_elements = []
+
+            if focal_elements:
+                focal_ids = {el.id for el in focal_elements}
+                focal_indices = [sorted_page_elements.index(el) for el in focal_elements if el in sorted_page_elements]
+                first_idx = min(focal_indices) if focal_indices else 0
+                last_idx = max(focal_indices) if focal_indices else 0
+
+                has_heading_or_title = any(
+                    el.type == "heading" or getattr(el.style, "font_size", 10) >= 14 or getattr(el.style, "bold", False)
+                    for el in focal_elements
+                )
+
+                if has_heading_or_title:
+                    # For headings, titles, or section anchors: include immediate body paragraphs/abstract below
+                    for el in sorted_page_elements[last_idx + 1: last_idx + 6]:
+                        if el.id not in focal_ids:
+                            supporting_elements.append(el)
+                else:
+                    # For standard body paragraphs / figures: include preceding and succeeding paragraphs
+                    start_ctx = max(0, first_idx - 1)
+                    end_ctx = min(len(sorted_page_elements), last_idx + 4)
+                    for el in sorted_page_elements[start_ctx:end_ctx]:
+                        if el.id not in focal_ids:
+                            supporting_elements.append(el)
+            else:
+                # Fallback: if no OCR element intersected the visual crop directly, provide top page blocks
+                supporting_elements = sorted_page_elements[:6]
+
+            all_context_elements = focal_elements + supporting_elements
+
+            # 3. Clean and Augment Query Prompt for Multimodal Reasoning
+            clean_query = query
+            focus_passage_text = ""
+            if "[Focus Passage]:" in query:
+                parts = query.split("Question:", 1)
+                if len(parts) == 2:
+                    focus_match = re.search(r'\[Focus Passage\]:\s*["\']?(.*?)["\']?\s*$', parts[0].strip(), re.DOTALL)
+                    if focus_match:
+                        focus_passage_text = focus_match.group(1).strip()
+                    clean_query = parts[1].strip()
+
+            focal_text_summary = "\n".join(f"[{el.id}] ({el.type}): \"{el.text.strip()}\"" for el in focal_elements if el.text.strip())
+            if not focal_text_summary and focus_passage_text:
+                focal_text_summary = focus_passage_text
+
+            augmented_question = (
+                f"The user selected a specific region on Page {target_page_idx + 1}.\n\n"
+                f"--- [PRIMARY FOCAL TARGET] ---\n"
+                f"{focal_text_summary or 'Visual region/diagram selected by user.'}\n"
+                f"-------------------------------\n\n"
+                f"User Question: \"{clean_query}\"\n\n"
+                f"INSTRUCTIONS:\n"
+                f"1. Your primary focus is the [PRIMARY FOCAL TARGET] selected by the user.\n"
+                f"2. Use the visual image crop and the surrounding document context (including abstract, introduction, and neighboring blocks) to provide a thorough, informative, and well-structured answer.\n"
+                f"3. Explain what the focal target represents, its technical purpose, architecture, and significance in the document.\n"
+                f"4. Format your answer with clean Markdown headers and bullet points."
             )
 
-            for token in qa_res.get("answer", "").split(" "):
-                yield {"type": "answer_delta", "delta": token + " "}
-                time.sleep(0.01)
+            yield {
+                "type": "thought_delta",
+                "delta": f"Synthesizing contextualized multimodal reasoning for selected region on Page {target_page_idx + 1}...\n\n"
+            }
+
+            accumulated_answer: List[str] = []
+            accumulated_thought: List[str] = []
+            primary_el = focal_elements[0] if focal_elements else None
+
+            # 4. Stream Answer via Qwopus 3.5 9B (or Fallback Engine)
+            if qwopus and qwopus.is_available():
+                try:
+                    stream_gen = qwopus.stream_question(
+                        image=cropped_img,
+                        elements=all_context_elements,
+                        question=augmented_question
+                    )
+                    for evt in stream_gen:
+                        if evt["type"] == "thought_delta":
+                            accumulated_thought.append(evt["delta"])
+                            yield evt
+                        elif evt["type"] == "answer_delta":
+                            accumulated_answer.append(evt["delta"])
+                            yield evt
+                        elif evt["type"] == "done":
+                            pass
+                except Exception as stream_err:
+                    logger.warning(f"Qwopus streaming error in selected region: {stream_err}. Falling back to VLM engine.")
+                    accumulated_answer = []
+
+            if not accumulated_answer:
+                # Deterministic fallback via VLM Engine with expanded context
+                vlm = get_vlm_engine_instance()
+                qa_res = vlm.answer_question(
+                    image=cropped_img,
+                    elements=all_context_elements,
+                    question=augmented_question
+                )
+                ans_fallback = qa_res.get("answer", "")
+                for token in ans_fallback.split(" "):
+                    accumulated_answer.append(token + " ")
+                    yield {"type": "answer_delta", "delta": token + " "}
+                    time.sleep(0.01)
+
+            final_answer_text = "".join(accumulated_answer).strip()
+            try:
+                from models.vlm_engine import QwopusVLMClient
+                final_answer_text = QwopusVLMClient._clean_scratchpad_from_answer(final_answer_text)
+            except Exception:
+                pass
+
+            ground_match = re.search(r"\n*(?:Grounded|Grounding):\s*\[?([a-zA-Z0-9_]+)\]?\s*$", final_answer_text, re.IGNORECASE)
+            if ground_match:
+                final_answer_text = final_answer_text[:ground_match.start()].strip()
 
             latency = (time.perf_counter() - start_time) * 1000.0
+
+            citation_label = f"Page {target_page_idx + 1}, Selected Region"
+            if primary_el and primary_el.text.strip():
+                snippet = primary_el.text.strip()
+                if len(snippet) > 35:
+                    snippet = snippet[:32] + "..."
+                citation_label = f"Page {target_page_idx + 1}, Selected Region ('{snippet}')"
+
             yield {
                 "type": "done",
                 "result": {
-                    "answer": qa_res.get("answer"),
-                    "grounded_element_id": "selected_region",
+                    "answer": final_answer_text,
+                    "grounded_element_id": primary_el.id if primary_el else "selected_region",
                     "grounded_bbox": region_bbox,
-                    "confidence": 0.95,
-                    "reasoning": "Inspected user-selected passage on canvas.",
-                    "citation_label": f"Page {target_page_idx + 1}, Selected Region",
+                    "page_idx": target_page_idx,
+                    "confidence": 0.98,
+                    "reasoning": (
+                        f"Autonomous Document Agent analyzed selected region on Page {target_page_idx + 1} with "
+                        f"hierarchical context expansion ({len(focal_elements)} focal elements, {len(supporting_elements)} contextual supporting blocks)."
+                    ),
+                    "citation_label": citation_label,
                     "latency_ms": round(latency, 2),
                     "engine": "Autonomous Document Agent (Qwopus 3.5 9B)"
                 }

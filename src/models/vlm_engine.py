@@ -668,17 +668,27 @@ Instructions:
                     best_elem = el
 
         ans_text = best_elem.text.strip()
-        if best_elem.type == "heading":
-            idx = elements.index(best_elem) if best_elem in elements else -1
-            if idx >= 0:
-                child_texts = []
-                for el in elements[idx + 1:]:
-                    if el.type == "heading":
-                        break
-                    if el.type in ("paragraph", "list_item", "text"):
-                        child_texts.append(el.text.strip())
-                if child_texts:
-                    ans_text = f"**{best_elem.text.strip()}**\n\n" + "\n\n".join(child_texts)
+        is_heading_type = (best_elem.type == "heading" or getattr(best_elem.style, "font_size", 10) >= 14 or getattr(best_elem.style, "bold", False))
+        idx = elements.index(best_elem) if best_elem in elements else -1
+
+        if is_heading_type and idx >= 0:
+            child_texts = []
+            for el in elements[idx + 1:]:
+                if el.type == "heading" and len(child_texts) >= 2:
+                    break
+                if el.type in ("paragraph", "list_item", "text") and len(el.text.strip()) > 15:
+                    child_texts.append(el.text.strip())
+                if len(child_texts) >= 4:
+                    break
+            if child_texts:
+                ans_text = f"**{best_elem.text.strip()}**\n\n" + "\n\n".join(child_texts)
+
+        # Contextual synthesis for general explanation/description queries
+        is_explain_query = any(w in q_lower for w in ["explain", "describe", "elaborate", "overview", "detail", "what is", "about", "discuss"])
+        if is_explain_query and len(ans_text.strip()) < 80 and len(elements) > 1:
+            supporting_snippets = [el.text.strip() for el in elements if el.id != best_elem.id and len(el.text.strip()) > 20][:3]
+            if supporting_snippets:
+                ans_text = f"### {best_elem.text.strip()}\n\n" + "\n\n".join(supporting_snippets)
 
         confidence = 0.94 if best_score >= 5.0 else (0.86 if best_score > 0 else 0.75)
         reasoning = f"Supporting evidence extracted from Block #{best_elem.id} ({best_elem.type}) matching query intent."
@@ -928,11 +938,18 @@ class QwopusVLMClient:
         structural_context = DualLayerVLMSystem.format_structural_elements(elements)
 
         system_prompt = (
-            "You are a professional Multimodal Document Understanding Engine (Stage 5A: Extractive QA).\n"
-            "Examine the visual image and the retrieved structural AST elements.\n"
-            "Provide a thorough, direct, well-structured answer in formatted Markdown (using bullet points and bold headers).\n"
-            "Do NOT output internal chain-of-thought, scratchpads, analysis steps, self-correction, or meta-commentary.\n"
-            "Start your answer directly with the requested information. At the very end of your response, specify the primary grounded AST element ID on its own line:\n"
+            "You are a strictly grounded Multimodal Document Intelligence Engine (Stage 5A: Extractive QA).\n"
+            "Examine the visual image and the retrieved structural AST elements from the user's uploaded document.\n\n"
+            "MANDATORY GROUNDING & ABSTENTION CONSTRAINTS:\n"
+            "1. Your answers MUST be derived exclusively from the provided document content (visual images, tables, diagrams, and structural AST text).\n"
+            "2. DO NOT act as a general-purpose programming assistant, creative writer, or general chatbot.\n"
+            "3. If the user asks for generic tasks, coding scripts, or topics completely unrelated to or unmentioned in the document (such as generic Python programs, unrelated algorithms, or standalone trivia):\n"
+            "   You MUST decline politely and state:\n"
+            "   \"This request is outside the scope of the provided document. As a document intelligence system, I can only answer questions and provide analysis directly grounded in this document's content, figures, and data.\"\n"
+            "4. Never hallucinate facts, algorithms, or code that are not substantiated by the document.\n"
+            "5. Provide a thorough, direct, well-structured answer in formatted Markdown (using bullet points and bold headers).\n"
+            "6. Do NOT output internal chain-of-thought, scratchpads, analysis steps, self-correction, or meta-commentary.\n"
+            "7. Start your answer directly with the requested information. At the very end of your response, specify the primary grounded AST element ID on its own line:\n"
             "Grounded: [element_id]"
         )
 
@@ -1113,11 +1130,18 @@ class QwopusVLMClient:
         structural_context = DualLayerVLMSystem.format_structural_elements(elements)
 
         system_prompt = (
-            "You are a professional Multimodal Document Understanding Engine (Stage 5A: Extractive QA).\n"
-            "Examine the visual image and the retrieved structural AST elements.\n"
-            "Provide a thorough, direct, well-structured answer in formatted Markdown (using bullet points and bold headers).\n"
-            "Do NOT output internal chain-of-thought, scratchpads, analysis steps, self-correction, or meta-commentary.\n"
-            "Start your answer directly with the requested information. At the very end of your response, specify the primary grounded AST element ID on its own line:\n"
+            "You are a strictly grounded Multimodal Document Intelligence Engine (Stage 5A: Extractive QA).\n"
+            "Examine the visual image and the retrieved structural AST elements from the user's uploaded document.\n\n"
+            "MANDATORY GROUNDING & ABSTENTION CONSTRAINTS:\n"
+            "1. Your answers MUST be derived exclusively from the provided document content (visual images, tables, diagrams, and structural AST text).\n"
+            "2. DO NOT act as a general-purpose programming assistant, creative writer, or general chatbot.\n"
+            "3. If the user asks for generic tasks, coding scripts, or topics completely unrelated to or unmentioned in the document (such as generic Python programs, unrelated algorithms, or standalone trivia):\n"
+            "   You MUST decline politely and state:\n"
+            "   \"This request is outside the scope of the provided document. As a document intelligence system, I can only answer questions and provide analysis directly grounded in this document's content, figures, and data.\"\n"
+            "4. Never hallucinate facts, algorithms, or code that are not substantiated by the document.\n"
+            "5. Provide a thorough, direct, well-structured answer in formatted Markdown (using bullet points and bold headers).\n"
+            "6. Do NOT output internal chain-of-thought, scratchpads, analysis steps, self-correction, or meta-commentary.\n"
+            "7. Start your answer directly with the requested information. At the very end of your response, specify the primary grounded AST element ID on its own line:\n"
             "Grounded: [element_id]"
         )
 
