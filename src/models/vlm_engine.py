@@ -34,34 +34,132 @@ COLOR_DIRECTIVE_MAP = {
     "orange": "#EA580C",
     "black": "#0F172A",
     "gray": "#64748B",
-    "grey": "#64748B"
+    "grey": "#64748B",
+    "teal": "#0D9488",
+    "pink": "#EC4899",
+    "cyan": "#06B6D4",
+    "navy": "#1E3A8A"
 }
 
 
 def extract_intent_directives(instruction: str, elements: Optional[List[DocumentElement]] = None) -> Dict[str, Any]:
     """
-    Parses user instruction for explicit target substrings, font sizes, colors,
-    alignments, styles, or highlights to ensure compound edits are never dropped.
+    Parses user instruction for explicit target substrings, document structures (title, abstract, authors, headings),
+    font sizes, colors, alignments, styles, or highlights to ensure compound edits are never dropped.
     """
     directives = {
         "target_id": None,
+        "target_ids": None,
+        "target_text": None,
         "operation": "SET_STYLE",
         "updates": {},
         "confidence": 0.95
     }
 
-    # 1. Target ID via exact quoted text match
+    inst_lower = instruction.lower().strip()
+
+    # 1. Target Identification (Supports Single and Compound Multi-Target Directives)
+    collected_target_ids = []
+
+    # A. Document Title Grounding
+    if any(term in inst_lower for term in ("title", "paper title", "document title", "article title", "main title")):
+        if elements:
+            title_candidates = [
+                el for el in elements
+                if el.page == 0 and el.bbox[1] < 125 and (el.type == "heading" or getattr(el.style, "font_size", 0) >= 16)
+            ]
+            if title_candidates:
+                collected_target_ids.extend([el.id for el in title_candidates])
+
+    # B. Abstract Section Grounding
+    if "abstract" in inst_lower:
+        if elements:
+            abs_cand = [
+                el for el in elements
+                if "abstract" in el.text.lower() or (el.page == 0 and 270 <= el.bbox[1] <= 450 and "abstract" in el.text.lower())
+            ]
+            if not abs_cand:
+                for el in elements:
+                    if "abstract" in el.text.lower():
+                        abs_cand.append(el)
+            if abs_cand:
+                collected_target_ids.extend([el.id for el in abs_cand])
+
+    # C. Author Block Grounding
+    if any(term in inst_lower for term in ("author", "authors", "affiliation", "affiliations", "professor", "college")):
+        if elements:
+            author_cand = [
+                el for el in elements
+                if el.page == 0 and 110 <= el.bbox[1] <= 320 and "abstract" not in el.text.lower()
+            ]
+            if author_cand:
+                collected_target_ids.extend([el.id for el in author_cand])
+
+    # D. Target ID and Target Substring via exact quoted text match
     quoted = re.findall(r"[\"']([^\"'\n\r]+)[\"']", instruction)
     if quoted and elements:
         for q in quoted:
             q_clean = q.strip().lower()
-            if len(q_clean) >= 3:
+            if len(q_clean) >= 2:
                 for el in elements:
                     if q_clean in el.text.lower():
-                        directives["target_id"] = el.id
+                        if el.id not in collected_target_ids:
+                            collected_target_ids.append(el.id)
+                        if not directives.get("target_text"):
+                            match_idx = el.text.lower().find(q_clean)
+                            if match_idx != -1:
+                                directives["target_text"] = el.text[match_idx : match_idx + len(q_clean)]
+                            else:
+                                directives["target_text"] = q.strip()
                         break
-            if directives["target_id"]:
-                break
+
+    # Also detect unquoted phrase: "color of <phrase> into/to" or "make <phrase> blue"
+    if not directives.get("target_text") and elements:
+        phrase_match = re.search(r"(?:color|style|font)\s+of\s+([a-zA-Z0-9_\-]+)\s+(?:into|to|in)\s+", instruction, re.IGNORECASE)
+        if not phrase_match:
+            phrase_match = re.search(r"make\s+([a-zA-Z0-9_\-]+)\s+(?:blue|yellow|red|green|emerald|purple|black|white)", instruction, re.IGNORECASE)
+        if phrase_match:
+            cand = phrase_match.group(1).strip()
+            for el in elements:
+                if cand.lower() in el.text.lower():
+                    if el.id not in collected_target_ids:
+                        collected_target_ids.append(el.id)
+                    match_idx = el.text.lower().find(cand.lower())
+                    directives["target_text"] = el.text[match_idx : match_idx + len(cand)]
+                    break
+
+    # E. Target ID via semantic keyword / heading match
+    if not collected_target_ids and elements:
+        for kw in ("introduction", "literature survey", "related work", "proposed system", "methodology", "result", "results", "conclusion", "table", "references"):
+            if kw in inst_lower:
+                for el in elements:
+                    if kw in el.text.lower():
+                        collected_target_ids.append(el.id)
+                        break
+                if collected_target_ids:
+                    break
+
+    # Consolidate target IDs
+    unique_target_ids = list(dict.fromkeys(collected_target_ids))
+    if unique_target_ids:
+        directives["target_id"] = unique_target_ids[0]
+        directives["target_ids"] = unique_target_ids
+        directives["confidence"] = 0.99
+
+        # Check for unquoted phrase match
+        if not directives["target_id"]:
+            stopwords = {"make", "change", "set", "the", "a", "an", "into", "to", "color", "colour", "font", "size", "style", "format", "bold", "italic", "underline"}
+            words = [w for w in re.findall(r"\b[a-zA-Z0-9_\-]+\b", inst_lower) if w not in stopwords and len(w) >= 3]
+            best_el = None
+            best_score = 0
+            for el in elements:
+                t_lower = el.text.lower()
+                score = sum(2 if re.search(r"\b" + re.escape(w) + r"\b", t_lower) else (1 if w in t_lower else 0) for w in words)
+                if score > best_score:
+                    best_score = score
+                    best_el = el
+            if best_el and best_score >= 2:
+                directives["target_id"] = best_el.id
 
     # 2. Font Size
     size_match = re.search(r"(?:font\s*size|size\s*(?:to|of|is)?)\s*(\d+)\b|\b(\d+)\s*(?:pt|px)\b", instruction, re.IGNORECASE)
@@ -77,15 +175,15 @@ def extract_intent_directives(instruction: str, elements: Optional[List[Document
         directives["updates"]["bold"] = True
 
     # 4. Italic
-    if re.search(r"\b(?:remove|un|no)\s*italic\b", instruction, re.IGNORECASE):
+    if re.search(r"\b(?:remove|un|no)\s*italic(?:s)?\b", instruction, re.IGNORECASE):
         directives["updates"]["italic"] = False
-    elif re.search(r"\bitalic\b", instruction, re.IGNORECASE):
+    elif re.search(r"\bitalic(?:s)?\b", instruction, re.IGNORECASE):
         directives["updates"]["italic"] = True
 
     # 5. Underline
     if re.search(r"\b(?:remove|un|no)\s*underline\b", instruction, re.IGNORECASE):
         directives["updates"]["underline"] = False
-    elif re.search(r"\bunderline\b", instruction, re.IGNORECASE):
+    elif re.search(r"\bunderline(?:d)?\b", instruction, re.IGNORECASE):
         directives["updates"]["underline"] = True
 
     # 6. Strikethrough
@@ -94,8 +192,12 @@ def extract_intent_directives(instruction: str, elements: Optional[List[Document
     elif re.search(r"\b(?:strikethrough|strike-through|cross\s*out|strike)\b", instruction, re.IGNORECASE):
         directives["updates"]["strikethrough"] = True
 
-    # 7. Alignment
-    align_match = re.search(r"\b(center|left|right|justify)(?:\s+align(?:ed|ment)?)?\b|\balign(?:ment)?\s+(?:to\s+)?(center|left|right|justify)\b", instruction, re.IGNORECASE)
+    # 7. Alignment (supports variations and common typos like 'algined')
+    align_match = re.search(
+        r"\b(center|left|right|justify)(?:\s+(?:align(?:ed|ment)?|algined|algned))?\b|\b(?:align(?:ed|ment)?|algined|algned)\s+(?:to\s+)?(center|left|right|justify)\b",
+        instruction,
+        re.IGNORECASE
+    )
     if align_match:
         align_val = (align_match.group(1) or align_match.group(2)).lower()
         directives["updates"]["alignment"] = align_val
@@ -128,18 +230,31 @@ def extract_intent_directives(instruction: str, elements: Optional[List[Document
     elif re.search(r"\b(?:tight|condensed)\s*(?:letter|character)\s*spac(?:e|ing)\b", instruction, re.IGNORECASE):
         directives["updates"]["letter_spacing"] = -1.0
 
-    # 11. Font Family
+    # 11. Font Family (STRICT & PROTECTED)
     matched_font = None
-    for cand in ("times new roman", "times", "arial", "calibri", "courier new", "courier", "georgia", "dejavu sans", "dejavu serif", "noto sans", "verdana", "helvetica", "jetbrains mono"):
+    known_fonts = (
+        "times new roman", "times", "arial", "calibri", "courier new", "courier",
+        "georgia", "dejavu sans", "dejavu serif", "liberation serif", "liberation sans",
+        "noto sans", "verdana", "helvetica", "jetbrains mono", "inter", "roboto"
+    )
+    for cand in known_fonts:
         if re.search(r"\b" + re.escape(cand) + r"\b", instruction, re.IGNORECASE):
             matched_font = cand.title()
             break
     if matched_font:
         directives["updates"]["font_family"] = matched_font
     else:
-        font_match = re.search(r"\bfont\s*(?:family)?\s*(?:to|as)?\s*[\"']?([A-Za-z\s]+)[\"']?", instruction, re.IGNORECASE)
-        if font_match:
-            directives["updates"]["font_family"] = font_match.group(1).strip().title()
+        # Only match if preceded by 'font family' or 'typeface', and NOT followed by color/size words
+        font_fam_match = re.search(
+            r"\b(?:font\s*family|typeface)\s*(?:to|as|is|=)?\s*[\"']?([A-Za-z0-9\s\-]+)[\"']?",
+            instruction,
+            re.IGNORECASE
+        )
+        if font_fam_match:
+            cand_fam = font_fam_match.group(1).strip().title()
+            non_font_terms = {"Color", "Size", "Bold", "Italic", "Yellow", "Red", "Blue", "Green", "Title", "Heading", "Into"}
+            if not any(t in cand_fam for t in non_font_terms) and len(cand_fam) >= 3:
+                directives["updates"]["font_family"] = cand_fam
 
     # 12. Color (named or hex)
     hex_match = re.search(r"#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{3})\b", instruction)
@@ -165,6 +280,31 @@ def extract_intent_directives(instruction: str, elements: Optional[List[Document
     if rep_match:
         directives["operation"] = "REPLACE_TEXT"
         directives["updates"]["text"] = rep_match.group(1).strip()
+
+    # 15. Subscript & Superscript
+    if re.search(r"\b(?:subscript|sub-script)\b", instruction, re.IGNORECASE):
+        directives["updates"]["subscript"] = True
+    elif re.search(r"\b(?:remove|un)\s*(?:subscript|sub-script)\b", instruction, re.IGNORECASE):
+        directives["updates"]["subscript"] = False
+
+    if re.search(r"\b(?:superscript|super-script)\b", instruction, re.IGNORECASE):
+        directives["updates"]["superscript"] = True
+    elif re.search(r"\b(?:remove|un)\s*(?:superscript|super-script)\b", instruction, re.IGNORECASE):
+        directives["updates"]["superscript"] = False
+
+    # 16. Text Case Transformation
+    if re.search(r"\b(?:uppercase|upper\s*case|all\s*caps)\b", instruction, re.IGNORECASE):
+        directives["updates"]["text_case"] = "uppercase"
+    elif re.search(r"\b(?:lowercase|lower\s*case)\b", instruction, re.IGNORECASE):
+        directives["updates"]["text_case"] = "lowercase"
+    elif re.search(r"\b(?:titlecase|title\s*case|capitalize)\b", instruction, re.IGNORECASE):
+        directives["updates"]["text_case"] = "capitalize"
+
+    # 17. Clear Formatting
+    if re.search(r"\b(?:clear|reset|remove)\s+(?:all\s+)?(?:format|formatting|styles?)\b", instruction, re.IGNORECASE):
+        directives["operation"] = "CLEAR_STYLE"
+
+    return directives
 
     return directives
 
@@ -842,6 +982,8 @@ Instructions:
 
             return {
                 "target_id": directives["target_id"] or target_id,
+                "target_ids": directives.get("target_ids"),
+                "target_text": directives.get("target_text"),
                 "operation": primary_op,
                 "property": primary_prop,
                 "value": primary_val,
@@ -859,6 +1001,8 @@ Instructions:
 
         return {
             "target_id": default_target,
+            "target_ids": directives.get("target_ids"),
+            "target_text": directives.get("target_text"),
             "operation": directives["operation"],
             "property": primary_prop,
             "value": primary_val,
@@ -1320,6 +1464,144 @@ class QwopusVLMClient:
                 "raw_response": full_raw_answer
             }
         }
+
+    def plan_manipulation(
+        self,
+        image: Image.Image,
+        elements: List[DocumentElement],
+        instruction: str
+    ) -> Dict[str, Any]:
+        """
+        Translates natural language instructions into structured AST operations
+        using Qwopus Claude-distilled reasoning with deterministic fallback.
+        """
+        directives = extract_intent_directives(instruction, elements)
+
+        if not self.is_available():
+            default_target = directives["target_id"] or (elements[0].id if elements else "e0")
+            merged_updates = directives["updates"] if directives["updates"] else {"bold": True}
+            primary_prop = list(merged_updates.keys())[0]
+            primary_val = merged_updates[primary_prop]
+            return {
+                "target_id": default_target,
+                "target_ids": directives.get("target_ids"),
+                "target_text": directives.get("target_text"),
+                "operation": directives["operation"],
+                "property": primary_prop,
+                "value": primary_val,
+                "updates": merged_updates,
+                "confidence": 0.95,
+                "reasoning": "Grounded from multimodal structure and instruction directives.",
+                "raw_response": "Deterministic AST grounding"
+            }
+
+        import base64
+        import urllib.request
+        from io import BytesIO
+
+        structural_context = DualLayerVLMSystem.format_structural_elements(elements)
+
+        system_prompt = (
+            "You are a strictly grounded Document Manipulation Engine.\n"
+            "Convert the user's natural language instruction into an atomic AST mutation action JSON.\n"
+            "Format: {\"target_id\": \"<element_id>\", \"operation\": \"SET_STYLE\", \"property\": \"<prop>\", \"value\": <val>, \"updates\": {<prop>: <val>}}\n"
+            "Do NOT include scratchpad text or conversational filler. Output only JSON."
+        )
+
+        user_content = (
+            f"--- STRUCTURAL AST ELEMENTS ---\n"
+            f"{structural_context}\n"
+            f"-------------------------------\n\n"
+            f"User Instruction: \"{instruction}\""
+        )
+
+        image = self._normalize_pil_image(image)
+        buffered = BytesIO()
+        image.save(buffered, format="JPEG", quality=85)
+        img_b64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
+
+        payload = {
+            "model": "qwopus",
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}},
+                        {"type": "text", "text": user_content}
+                    ]
+                }
+            ],
+            "temperature": 0.1,
+            "max_tokens": 600,
+            "stream": False
+        }
+
+        try:
+            req = urllib.request.Request(
+                self.endpoint,
+                data=json.dumps(payload).encode("utf-8"),
+                headers={"Content-Type": "application/json"}
+            )
+            with urllib.request.urlopen(req, timeout=15.0) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                choice_msg = data["choices"][0]["message"]
+                output_text = choice_msg.get("content") or choice_msg.get("reasoning_content") or ""
+                parsed = DualLayerVLMSystem._extract_json_payload(output_text)
+
+                if parsed and isinstance(parsed, dict) and "target_id" in parsed:
+                    target_id = parsed["target_id"]
+                    found = any(e.id == target_id for e in elements)
+                    if not found and directives["target_id"]:
+                        target_id = directives["target_id"]
+                    elif not found and elements:
+                        target_id = elements[0].id
+
+                    vlm_updates = parsed.get("updates", {})
+                    if not isinstance(vlm_updates, dict):
+                        vlm_updates = {}
+                    if parsed.get("property") and "value" in parsed:
+                        vlm_updates.setdefault(parsed["property"], parsed["value"])
+                    for k, v in directives["updates"].items():
+                        vlm_updates[k] = v
+
+                    primary_prop = list(vlm_updates.keys())[0] if vlm_updates else parsed.get("property", "bold")
+                    primary_val = vlm_updates.get(primary_prop, parsed.get("value", True))
+
+                    return {
+                        "target_id": directives["target_id"] or target_id,
+                        "target_ids": directives.get("target_ids"),
+                        "target_text": directives.get("target_text"),
+                        "operation": directives.get("operation") or parsed.get("operation", "SET_STYLE"),
+                        "property": primary_prop,
+                        "value": primary_val,
+                        "updates": vlm_updates,
+                        "confidence": 0.95,
+                        "reasoning": parsed.get("reasoning", "Instruction mapped via Qwopus multimodal reasoning."),
+                        "raw_response": output_text
+                    }
+        except Exception:
+            pass
+
+        # Deterministic fallback
+        default_target = directives["target_id"] or (elements[0].id if elements else "e0")
+        merged_updates = directives["updates"] if directives["updates"] else {"bold": True}
+        primary_prop = list(merged_updates.keys())[0]
+        primary_val = merged_updates[primary_prop]
+
+        return {
+            "target_id": default_target,
+            "target_ids": directives.get("target_ids"),
+            "target_text": directives.get("target_text"),
+            "operation": directives["operation"],
+            "property": primary_prop,
+            "value": primary_val,
+            "updates": merged_updates,
+            "confidence": 0.95,
+            "reasoning": "Grounded from multimodal structure and instruction directives.",
+            "raw_response": "Deterministic fallback"
+        }
+
 
 
 _QWOPUS_CLIENT_INSTANCE: Optional[QwopusVLMClient] = None

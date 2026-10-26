@@ -60,7 +60,11 @@ class ManipulateRequest(BaseModel):
     document_id: str
     page_idx: int = 0
     instruction: str
+    target_id: Optional[str] = None
+    target_text: Optional[str] = None
+    properties: Optional[Dict[str, Any]] = None
     engine: str = "qwopus-9b"  # "qwopus-9b", "dual-layer-vlm", or "custom-compact"
+    render_engine: str = "native-office"  # "native-office" (LibreOffice 150 DPI) or "canvas" (PIL)
 
 
 class ManipulateResponse(BaseModel):
@@ -69,6 +73,7 @@ class ManipulateResponse(BaseModel):
     success: bool
     target_element_id: Optional[str] = None
     target_text: Optional[str] = None
+    target_bbox: Optional[List[float]] = None
     operation: Optional[str] = None
     property: Optional[str] = None
     value: Any = None
@@ -79,7 +84,26 @@ class ManipulateResponse(BaseModel):
     re_rendered_image_url: Optional[str] = None
     latency_ms: float
     engine: str
+    undo_count: int = 0
+    redo_count: int = 0
+    applied_plans: List[Dict[str, Any]] = Field(default_factory=list)
     error: Optional[str] = None
+
+
+class CheckpointActionRequest(BaseModel):
+    document_id: str
+    page_idx: int = 0
+    render_engine: str = "native-office"
+
+
+class CheckpointActionResponse(BaseModel):
+    document_id: str
+    page_idx: int
+    success: bool
+    undo_count: int = 0
+    redo_count: int = 0
+    re_rendered_image_url: Optional[str] = None
+    message: str
 
 
 class BenchmarkSampleDTO(BaseModel):

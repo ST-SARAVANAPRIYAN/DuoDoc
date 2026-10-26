@@ -176,7 +176,16 @@ export async function streamQA({
   }
 }
 
-export async function runManipulation({ documentId, pageIdx = 0, instruction, engine = 'qwopus-9b' }) {
+export async function runManipulation({
+  documentId,
+  pageIdx = 0,
+  instruction,
+  targetId = null,
+  targetText = null,
+  properties = null,
+  engine = 'qwopus-9b',
+  renderEngine = 'native-office',
+}) {
   const res = await fetch(`${API_BASE}/intelligence/manipulate`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -184,7 +193,11 @@ export async function runManipulation({ documentId, pageIdx = 0, instruction, en
       document_id: documentId,
       page_idx: pageIdx,
       instruction,
+      target_id: targetId,
+      target_text: targetText,
+      properties: properties,
       engine,
+      render_engine: renderEngine,
     }),
   });
 
@@ -192,6 +205,48 @@ export async function runManipulation({ documentId, pageIdx = 0, instruction, en
     const err = await res.json().catch(() => ({}));
     throw new Error(err.detail || 'Document manipulation failed');
   }
+  return res.json();
+}
+
+export async function undoManipulation({ documentId, pageIdx = 0, renderEngine = 'native-office' }) {
+  const res = await fetch(`${API_BASE}/intelligence/manipulate/undo`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      document_id: documentId,
+      page_idx: pageIdx,
+      render_engine: renderEngine,
+    }),
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'Undo manipulation failed');
+  }
+  return res.json();
+}
+
+export async function redoManipulation({ documentId, pageIdx = 0, renderEngine = 'native-office' }) {
+  const res = await fetch(`${API_BASE}/intelligence/manipulate/redo`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      document_id: documentId,
+      page_idx: pageIdx,
+      render_engine: renderEngine,
+    }),
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'Redo manipulation failed');
+  }
+  return res.json();
+}
+
+export async function getCheckpoints(documentId) {
+  const res = await fetch(`${API_BASE}/intelligence/manipulate/checkpoints/${documentId}`);
+  if (!res.ok) return { undo_count: 0, redo_count: 0 };
   return res.json();
 }
 

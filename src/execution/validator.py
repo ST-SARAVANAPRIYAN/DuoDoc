@@ -16,7 +16,8 @@ ALLOWED_OPERATIONS = {
     "RETRIEVE_INFO",
     "REPLACE_TEXT",
     "MOVE_ELEMENT",
-    "DELETE_ELEMENT"
+    "DELETE_ELEMENT",
+    "CLEAR_STYLE"
 }
 
 ALLOWED_PROPERTIES = {
@@ -25,6 +26,9 @@ ALLOWED_PROPERTIES = {
     "underline": bool,
     "strikethrough": bool,
     "strike": bool,
+    "subscript": bool,
+    "superscript": bool,
+    "text_case": str,
     "font_size": (int, float),
     "font_family": str,
     "alignment": str,
@@ -38,6 +42,7 @@ ALLOWED_PROPERTIES = {
 }
 
 ALLOWED_ALIGNMENTS = {"left", "center", "right", "justify"}
+ALLOWED_CASES = {"uppercase", "lowercase", "capitalize", "titlecase", "none"}
 
 
 COLOR_NAME_MAP = {
@@ -121,9 +126,14 @@ class ActionSafetyValidator:
                 if align_str not in ALLOWED_ALIGNMENTS:
                     return False, f"Invalid alignment: '{val}'. Allowed: {ALLOWED_ALIGNMENTS}"
 
-            elif prop in ("bold", "italic", "underline", "strikethrough", "strike", "highlight"):
+            elif prop in ("bold", "italic", "underline", "strikethrough", "strike", "highlight", "subscript", "superscript"):
                 if not isinstance(val, bool) and str(val).lower() not in ("true", "false", "1", "0"):
                     return False, f"Boolean property '{prop}' received non-boolean value: '{val}'."
+
+            elif prop == "text_case":
+                case_str = str(val).lower()
+                if case_str not in ALLOWED_CASES:
+                    return False, f"Invalid text case: '{val}'. Allowed: {ALLOWED_CASES}"
 
             elif prop in ("indent", "left_indent"):
                 try:

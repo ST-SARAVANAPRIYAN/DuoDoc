@@ -253,3 +253,180 @@ def test_vlm_intent_extraction_formatting():
     assert d5["updates"]["font_family"] == "Times New Roman"
     assert d5["updates"]["bold"] is False
 
+
+def test_native_office_rendering(sample_document):
+    from render import render_native_office_page
+    from PIL import Image
+
+    img = render_native_office_page(sample_document, page_id=0, highlight_elem_id="heading_main")
+    assert isinstance(img, Image.Image)
+    assert img.width > 500
+    assert img.height > 500
+
+
+def test_undo_redo_checkpoint_stack(sample_document):
+    from backend.session_store import (
+        store_document,
+        push_checkpoint,
+        undo_checkpoint,
+        redo_checkpoint,
+        get_checkpoint_status
+    )
+
+    doc_id = "test_chk_doc"
+    store_document(doc_id, sample_document)
+
+    # Initial checkpoint status
+    status = get_checkpoint_status(doc_id)
+    assert status["undo_count"] == 0
+    assert status["redo_count"] == 0
+
+    # Save checkpoint before mutation 1
+    push_checkpoint(doc_id, sample_document)
+    mutated_1, _ = DocumentStateExecutor.execute_action(
+        sample_document, "heading_main", "SET_STYLE", "bold", True
+    )
+    store_document(doc_id, mutated_1)
+
+    status = get_checkpoint_status(doc_id)
+    assert status["undo_count"] == 1
+    assert status["redo_count"] == 0
+
+    # Save checkpoint before mutation 2
+    push_checkpoint(doc_id, mutated_1)
+    mutated_2, _ = DocumentStateExecutor.execute_action(
+        mutated_1, "heading_main", "SET_STYLE", "font_size", 28
+    )
+    store_document(doc_id, mutated_2)
+
+    status = get_checkpoint_status(doc_id)
+    assert status["undo_count"] == 2
+    assert status["redo_count"] == 0
+
+    # Test Undo (should revert to mutated_1)
+    undone_1 = undo_checkpoint(doc_id)
+    assert undone_1 is not None
+    _, el = undone_1.find_element("heading_main")
+    assert el.style.bold is True
+    assert el.style.font_size == 16  # font size reverted from 28 to 16
+
+    status = get_checkpoint_status(doc_id)
+    assert status["undo_count"] == 1
+    assert status["redo_count"] == 1
+
+    # Test Undo again (should revert to original)
+    undone_2 = undo_checkpoint(doc_id)
+    assert undone_2 is not None
+    _, el = undone_2.find_element("heading_main")
+    assert el.style.bold is False
+
+    status = get_checkpoint_status(doc_id)
+    assert status["undo_count"] == 0
+    assert status["redo_count"] == 2
+
+    # Test Redo (should reapply mutation 1)
+    redone_1 = redo_checkpoint(doc_id)
+    assert redone_1 is not None
+    _, el = redone_1.find_element("heading_main")
+    assert el.style.bold is True
+
+    status = get_checkpoint_status(doc_id)
+    assert status["undo_count"] == 1
+    assert status["redo_count"] == 1
+
+
+def test_target_text_substring_span_and_case(sample_document):
+    # Element text: "Executive Overview"
+    # Target only "Overview" and change color to blue
+    mod_doc, audit = DocumentStateExecutor.execute_action(
+        sample_document,
+        target_element_id="heading_main",
+        operation="SET_STYLE",
+        property_name="color",
+        value="#2563EB",
+        target_text="Overview"
+    )
+
+    assert audit["success"] is True
+    _, mod_el = mod_doc.find_element("heading_main")
+    # Base element color should NOT be mutated
+    assert mod_el.style.color != "#2563EB"
+    # Metadata should contain the styled span
+    assert "spans" in mod_el.metadata
+    assert len(mod_el.metadata["spans"]) == 1
+    assert mod_el.metadata["spans"][0]["text"] == "Overview"
+    assert mod_el.metadata["spans"][0]["style"]["color"] == "#2563EB"
+
+    # Test text case transformation on substring "Executive" -> uppercase
+    case_doc, case_audit = DocumentStateExecutor.execute_action(
+        mod_doc,
+        target_element_id="heading_main",
+        operation="SET_STYLE",
+        property_name="text_case",
+        value="uppercase",
+        target_text="Executive"
+    )
+    assert case_audit["success"] is True
+    _, case_el = case_doc.find_element("heading_main")
+    assert "EXECUTIVE Overview" == case_el.text
+
+
+def test_subscript_superscript_and_clear_style(sample_document):
+    # 1. Test Subscript
+    sub_doc, sub_audit = DocumentStateExecutor.execute_action(
+        sample_document,
+        target_element_id="para_1",
+        operation="SET_STYLE",
+        property_name="subscript",
+        value=True
+    )
+    assert sub_audit["success"] is True
+    _, sub_el = sub_doc.find_element("para_1")
+    assert sub_el.style.subscript is True
+    assert sub_el.style.superscript is False
+
+    # 2. Test Superscript (should deactivate subscript)
+    sup_doc, sup_audit = DocumentStateExecutor.execute_action(
+        sub_doc,
+        target_element_id="para_1",
+        operation="SET_STYLE",
+        property_name="superscript",
+        value=True
+    )
+    assert sup_audit["success"] is True
+    _, sup_el = sup_doc.find_element("para_1")
+    assert sup_el.style.superscript is True
+    assert sup_el.style.subscript is False
+
+    # 3. Test Clear Style
+    clear_doc, clear_audit = DocumentStateExecutor.execute_action(
+        sup_doc,
+        target_element_id="para_1",
+        operation="CLEAR_STYLE"
+    )
+    assert clear_audit["success"] is True
+    _, clear_el = clear_doc.find_element("para_1")
+    assert clear_el.style.superscript is False
+    assert clear_el.style.subscript is False
+    assert "spans" not in clear_el.metadata
+
+
+def test_canvas_multi_span_rendering(sample_document):
+    from render.canvas import DocumentCanvasRenderer
+    # Add a styled substring span to heading_main
+    mod_doc, _ = DocumentStateExecutor.execute_action(
+        sample_document,
+        target_element_id="heading_main",
+        operation="SET_STYLE",
+        property_name="color",
+        value="#2563EB",
+        target_text="Overview"
+    )
+    renderer = DocumentCanvasRenderer()
+    img = renderer.render_page(mod_doc, page_id=0)
+    assert img is not None
+    assert img.size == (800, 1000)
+
+
+
+

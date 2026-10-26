@@ -9,7 +9,10 @@ export default function DocumentCanvas({
   onPageChange,
   highlightBbox = null,
   highlightLabel = null,
-  highlightColor = "#10B981"
+  highlightColor = "#10B981",
+  elements = [],
+  selectedElementId = null,
+  onSelectElement = null,
 }) {
   const [zoom, setZoom] = useState(1);
   const containerRef = useRef(null);
@@ -70,12 +73,74 @@ export default function DocumentCanvas({
               style={{ display: 'block', maxHeight: '620px' }}
             />
 
+            {/* Interactive Element Selection Hitboxes */}
+            {elements && elements.length > 0 && elements.map((el) => {
+              if (!el.bbox || el.bbox.length !== 4) return null;
+              const leftPct = (el.bbox[0] / 800) * 100;
+              const topPct = (el.bbox[1] / 1000) * 100;
+              const widthPct = ((el.bbox[2] - el.bbox[0]) / 800) * 100;
+              const heightPct = ((el.bbox[3] - el.bbox[1]) / 1000) * 100;
+              const isSelected = selectedElementId === el.id;
+
+              return (
+                <div
+                  key={el.id}
+                  onClick={() => onSelectElement && onSelectElement(el)}
+                  title={`Click to target: ${el.type} (${(el.text || '').slice(0, 30)})`}
+                  style={{
+                    position: 'absolute',
+                    left: `${leftPct}%`,
+                    top: `${topPct}%`,
+                    width: `${widthPct}%`,
+                    height: `${heightPct}%`,
+                    border: isSelected ? '2px solid #0284C7' : '1px dashed transparent',
+                    backgroundColor: isSelected ? 'rgba(2, 132, 199, 0.15)' : 'transparent',
+                    cursor: onSelectElement ? 'pointer' : 'default',
+                    zIndex: isSelected ? 12 : 5,
+                    transition: 'all 0.15s ease',
+                  }}
+                  onMouseEnter={(e) => {
+                    if (!isSelected && onSelectElement) {
+                      e.currentTarget.style.borderColor = 'rgba(2, 132, 199, 0.6)';
+                      e.currentTarget.style.backgroundColor = 'rgba(2, 132, 199, 0.08)';
+                    }
+                  }}
+                  onMouseLeave={(e) => {
+                    if (!isSelected && onSelectElement) {
+                      e.currentTarget.style.borderColor = 'transparent';
+                      e.currentTarget.style.backgroundColor = 'transparent';
+                    }
+                  }}
+                >
+                  {isSelected && (
+                    <span
+                      style={{
+                        position: 'absolute',
+                        top: '-18px',
+                        left: '0',
+                        background: '#0284C7',
+                        color: '#FFFFFF',
+                        fontSize: '9px',
+                        fontWeight: 700,
+                        padding: '1px 5px',
+                        borderRadius: '3px',
+                        fontFamily: 'var(--font-mono)',
+                        whiteSpace: 'nowrap',
+                        pointerEvents: 'none',
+                      }}
+                    >
+                      🎯 {el.type} ({el.id})
+                    </span>
+                  )}
+                </div>
+              );
+            })}
+
             {/* Evidence Bounding Box Overlay if coordinates available */}
             {highlightBbox && highlightBbox.length === 4 && (
               <div
                 style={{
                   position: 'absolute',
-                  // normalized relative percentage calculation
                   left: `${(highlightBbox[0] / 800) * 100}%`,
                   top: `${(highlightBbox[1] / 1000) * 100}%`,
                   width: `${((highlightBbox[2] - highlightBbox[0]) / 800) * 100}%`,

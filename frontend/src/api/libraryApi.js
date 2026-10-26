@@ -144,6 +144,19 @@ export async function deleteDocument(documentId) {
   return res.json();
 }
 
+export async function createBlankDocument(title = 'Untitled Document', folderId = null) {
+  const res = await fetch(`${API_BASE}/library/create-blank`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+    body: JSON.stringify({ title, folder_id: folderId })
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'Failed to create new document');
+  }
+  return res.json();
+}
+
 export async function updateDocument(documentId, { title, tags }) {
   const res = await fetch(`${API_BASE}/library/documents/${documentId}`, {
     method: 'PUT',

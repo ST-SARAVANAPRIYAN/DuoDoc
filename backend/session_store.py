@@ -4,6 +4,7 @@ In-Memory Document & Model Session Store for Backend Operations
 
 import os
 import sys
+import copy
 import json
 import logging
 import torch
@@ -49,15 +50,35 @@ def get_document(doc_id: str) -> Optional[UnifiedDocument]:
     if doc_id in DOCUMENTS:
         return DOCUMENTS[doc_id]
 
-    # Attempt restoration from uploads/ directory, docs/ directory, or database record
+    # Attempt restoration from MongoDB AST cache, uploads/ directory, or docs/ directory
     try:
         from config import UPLOAD_DIR, RENDERS_DIR
         from parser import DocxDocumentParser, PdfDocumentParser
         from render import render_canvas
         from database.mongodb import get_db
 
+        # 1. Instant Cache-Hit: Check MongoDB document_asts collection
+        try:
+            db = get_db()
+            if db is not None:
+                ast_record = db["document_asts"].find_one({"document_id": doc_id})
+                if ast_record and "ast" in ast_record:
+                    cached_doc = UnifiedDocument.from_dict(ast_record["ast"])
+                    # Verify page raster images exist on disk
+                    renders_dir = RENDERS_DIR / doc_id
+                    all_rasters_exist = all(
+                        p.image_path and os.path.exists(p.image_path)
+                        for p in cached_doc.pages
+                    )
+                    if all_rasters_exist:
+                        DOCUMENTS[doc_id] = cached_doc
+                        logger.info(f"Loaded document {doc_id} instantly from MongoDB AST cache (<10ms).")
+                        return cached_doc
+        except Exception as cache_err:
+            logger.debug(f"MongoDB AST cache lookup failed for {doc_id}: {cache_err}")
+
         file_path = None
-        # 1. Check database if available
+        # 2. Check database document records if available
         try:
             db = get_db()
             if db is not None:
@@ -67,7 +88,7 @@ def get_document(doc_id: str) -> Optional[UnifiedDocument]:
         except Exception:
             pass
 
-        # 2. Search uploads/ directory
+        # 3. Search uploads/ directory
         if not file_path:
             for pattern in (f"{doc_id}_*.*", f"*{doc_id}*.*"):
                 matches = [f for f in UPLOAD_DIR.glob(pattern) if f.suffix.lower() in (".docx", ".pdf", ".png", ".jpg", ".jpeg")]
@@ -75,7 +96,7 @@ def get_document(doc_id: str) -> Optional[UnifiedDocument]:
                     file_path = matches[0]
                     break
 
-        # 3. Search docs/ directory
+        # 4. Search docs/ directory
         if not file_path:
             for f in Path("docs").glob("*.*"):
                 if f.stem == doc_id or doc_id in f.name:
@@ -103,6 +124,19 @@ def get_document(doc_id: str) -> Optional[UnifiedDocument]:
             doc.document_id = doc_id
             DOCUMENTS[doc_id] = doc
             logger.info(f"Auto-restored document {doc_id} from {file_path.name}")
+
+            # Persist to MongoDB AST cache for instant future retrieval
+            try:
+                db = get_db()
+                if db is not None:
+                    db["document_asts"].replace_one(
+                        {"document_id": doc_id},
+                        {"document_id": doc_id, "ast": doc.to_dict()},
+                        upsert=True
+                    )
+            except Exception:
+                pass
+
             return doc
     except Exception as e:
         logger.warning(f"Could not auto-restore document '{doc_id}': {e}")
@@ -112,6 +146,68 @@ def get_document(doc_id: str) -> Optional[UnifiedDocument]:
 
 def store_document(doc_id: str, doc: UnifiedDocument):
     DOCUMENTS[doc_id] = doc
+    try:
+        from database.mongodb import get_db
+        db = get_db()
+        if db is not None:
+            db["document_asts"].replace_one(
+                {"document_id": doc_id},
+                {"document_id": doc_id, "ast": doc.to_dict()},
+                upsert=True
+            )
+    except Exception as e:
+        logger.debug(f"Could not persist document AST to MongoDB: {e}")
+
+
+# Checkpoint Undo / Redo Transaction Stacks (Slide 10: Invertible Mutation Calculus)
+DOCUMENT_CHECKPOINTS: Dict[str, list] = {}  # doc_id -> list of deepcopied UnifiedDocument
+DOCUMENT_REDO_STACK: Dict[str, list] = {}   # doc_id -> list of deepcopied UnifiedDocument
+MAX_CHECKPOINTS = 20
+
+
+def push_checkpoint(doc_id: str, doc: UnifiedDocument):
+    """Saves snapshot of document to undo stack before mutation, clearing redo stack."""
+    if doc_id not in DOCUMENT_CHECKPOINTS:
+        DOCUMENT_CHECKPOINTS[doc_id] = []
+    DOCUMENT_CHECKPOINTS[doc_id].append(copy.deepcopy(doc))
+    if len(DOCUMENT_CHECKPOINTS[doc_id]) > MAX_CHECKPOINTS:
+        DOCUMENT_CHECKPOINTS[doc_id].pop(0)
+    DOCUMENT_REDO_STACK[doc_id] = []
+
+
+def undo_checkpoint(doc_id: str) -> Optional[UnifiedDocument]:
+    """Rolls back document state to previous snapshot, pushing current state to redo stack."""
+    current_doc = get_document(doc_id)
+    if not current_doc or doc_id not in DOCUMENT_CHECKPOINTS or not DOCUMENT_CHECKPOINTS[doc_id]:
+        return None
+    prev_doc = DOCUMENT_CHECKPOINTS[doc_id].pop()
+    if doc_id not in DOCUMENT_REDO_STACK:
+        DOCUMENT_REDO_STACK[doc_id] = []
+    DOCUMENT_REDO_STACK[doc_id].append(copy.deepcopy(current_doc))
+    store_document(doc_id, prev_doc)
+    return prev_doc
+
+
+def redo_checkpoint(doc_id: str) -> Optional[UnifiedDocument]:
+    """Reapplies next state from redo stack, pushing current state to undo stack."""
+    current_doc = get_document(doc_id)
+    if not current_doc or doc_id not in DOCUMENT_REDO_STACK or not DOCUMENT_REDO_STACK[doc_id]:
+        return None
+    next_doc = DOCUMENT_REDO_STACK[doc_id].pop()
+    if doc_id not in DOCUMENT_CHECKPOINTS:
+        DOCUMENT_CHECKPOINTS[doc_id] = []
+    DOCUMENT_CHECKPOINTS[doc_id].append(copy.deepcopy(current_doc))
+    store_document(doc_id, next_doc)
+    return next_doc
+
+
+def get_checkpoint_status(doc_id: str) -> Dict[str, int]:
+    """Returns number of available undo and redo steps for doc_id."""
+    return {
+        "undo_count": len(DOCUMENT_CHECKPOINTS.get(doc_id, [])),
+        "redo_count": len(DOCUMENT_REDO_STACK.get(doc_id, []))
+    }
+
 
 
 def get_vlm_engine_instance() -> DualLayerVLMSystem:

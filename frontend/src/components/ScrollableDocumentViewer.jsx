@@ -48,19 +48,16 @@ const ScrollableDocumentViewer = forwardRef(function ScrollableDocumentViewer(
   const handleZoomOut = () => setZoom((z) => Math.max(+(z - 0.15).toFixed(2), 0.6));
   const handleZoomReset = () => setZoom(1.0);
 
-  const [dragBox, setDragBox] = useState(null);
-  const lastDragTimeRef = useRef(0);
-
   // Handle clicking a structured block (paragraph, image, heading, table)
   const handleBlockClick = (e, pageIdx, el) => {
     e.stopPropagation();
-    // If user just completed a drag marquee selection, do not trigger single block click
-    if (Date.now() - lastDragTimeRef.current < 250) {
-      return;
-    }
     if (!el) return;
 
-    if (selectedPassage?.elementId === el.id) {
+    // Check if user highlighted a specific sub-string with the mouse
+    const selection = window.getSelection();
+    const highlightedText = selection && !selection.isCollapsed ? selection.toString().trim() : '';
+
+    if (!highlightedText && selectedPassage?.elementId === el.id && !selectedPassage?.selectedText) {
       onClearPassage();
       return;
     }
@@ -73,132 +70,31 @@ const ScrollableDocumentViewer = forwardRef(function ScrollableDocumentViewer(
       pageIdx,
       elementId: el.id,
       text: passageText,
+      selectedText: highlightedText && highlightedText.length > 0 ? highlightedText : null,
       bbox: el.bbox,
-      type: el.type
+      type: el.type,
+      style: el.style || {},
     });
   };
 
-  // Canvas Mouse Down: Start marquee drag selection
-  const handleCanvasMouseDown = (e, pageIdx) => {
-    if (e.button !== 0) return; // Only primary button
-    const rect = e.currentTarget.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
-    setDragBox({
-      pageIdx,
-      startX: x,
-      startY: y,
-      currentX: x,
-      currentY: y,
-      rectWidth: rect.width,
-      rectHeight: rect.height,
-      isDragging: false,
-    });
-  };
-
-  // Canvas Mouse Move: Update marquee selection boundary
-  const handleCanvasMouseMove = (e, pageIdx) => {
-    if (!dragBox || dragBox.pageIdx !== pageIdx) return;
-    const rect = e.currentTarget.getBoundingClientRect();
-    const x = Math.max(0, Math.min(e.clientX - rect.left, rect.width));
-    const y = Math.max(0, Math.min(e.clientY - rect.top, rect.height));
-    const dist = Math.hypot(x - dragBox.startX, y - dragBox.startY);
-    if (dist > 6) {
-      setDragBox((prev) => (prev ? { ...prev, currentX: x, currentY: y, isDragging: true } : null));
-    }
-  };
-
-  // Canvas Mouse Up: Complete drag or process text selection
-  const handleCanvasMouseUp = (e, pageIdx, page) => {
-    if (!dragBox || dragBox.pageIdx !== pageIdx) return;
-
-    if (dragBox.isDragging) {
-      lastDragTimeRef.current = Date.now();
-      const rect = e.currentTarget.getBoundingClientRect();
-      const minX = Math.min(dragBox.startX, dragBox.currentX);
-      const maxX = Math.max(dragBox.startX, dragBox.currentX);
-      const minY = Math.min(dragBox.startY, dragBox.currentY);
-      const maxY = Math.max(dragBox.startY, dragBox.currentY);
-
-      const wrapperW = rect.width || 800;
-      const wrapperH = rect.height || 1000;
-      const docW = page.width || 800;
-      const docH = page.height || 1000;
-
-      const ptX1 = Math.max(0, Math.round((minX / wrapperW) * docW * 10) / 10);
-      const ptY1 = Math.max(0, Math.round((minY / wrapperH) * docH * 10) / 10);
-      const ptX2 = Math.min(docW, Math.round((maxX / wrapperW) * docW * 10) / 10);
-      const ptY2 = Math.min(docH, Math.round((maxY / wrapperH) * docH * 10) / 10);
-
-      // Find all elements that intersect the dragged box
-      const intersecting = (page.elements || []).filter((el) => {
-        if (!el.bbox || el.bbox.length !== 4) return false;
-        const [bx1, by1, bx2, by2] = el.bbox;
-        return !(ptX2 < bx1 || ptX1 > bx2 || ptY2 < by1 || ptY1 > by2);
-      });
-
-      // Sort in natural reading order: top-to-bottom, left-to-right
-      intersecting.sort((a, b) => {
-        if (Math.abs(a.bbox[1] - b.bbox[1]) < 12) {
-          return a.bbox[0] - b.bbox[0];
-        }
-        return a.bbox[1] - b.bbox[1];
-      });
-
-      let extractedText = '';
-      if (intersecting.length > 0) {
-        const textParts = intersecting
-          .map((el) => {
-            if (el.text && el.text.trim()) return el.text.trim();
-            if (el.type === 'image') return '[Embedded Figure / Architecture Diagram]';
-            if (el.type === 'table') return '[Embedded Table]';
-            return '';
-          })
-          .filter(Boolean);
-        extractedText = textParts.join('\n\n');
-      }
-
-      if (!extractedText) {
-        extractedText = `[Region Selection: Page ${pageIdx + 1}]`;
-      }
-
-      onSelectPassage({
-        pageIdx,
-        elementId: intersecting.length === 1 ? intersecting[0].id : `region-${Date.now()}`,
-        text: extractedText,
-        bbox: [ptX1, ptY1, ptX2, ptY2],
-        type: intersecting.length === 1 ? intersecting[0].type : 'selected_region',
-      });
-    } else {
-      // Short click/drag: check native text selection
-      const selection = window.getSelection();
-      if (selection && !selection.isCollapsed) {
-        const selectedText = selection.toString().trim();
-        if (selectedText.length > 2) {
-          const matchingEls = (page.elements || []).filter(
-            (el) => el.text && (el.text.includes(selectedText) || selectedText.includes(el.text.trim()))
-          );
-          let bbox = [0, 0, page.width || 800, 100];
-          if (matchingEls.length > 0) {
-            bbox = [
-              Math.min(...matchingEls.map((e) => e.bbox[0])),
-              Math.min(...matchingEls.map((e) => e.bbox[1])),
-              Math.max(...matchingEls.map((e) => e.bbox[2])),
-              Math.max(...matchingEls.map((e) => e.bbox[3])),
-            ];
-          }
-          onSelectPassage({
-            pageIdx,
-            elementId: matchingEls[0]?.id || `sel-${Date.now()}`,
-            text: selectedText,
-            bbox,
-            type: matchingEls[0]?.type || 'selection',
-          });
-        }
+  const handleBlockMouseUp = (e, pageIdx, el) => {
+    const selection = window.getSelection();
+    if (selection && !selection.isCollapsed) {
+      const highlightedText = selection.toString().trim();
+      if (highlightedText.length > 0) {
+        e.stopPropagation();
+        const passageText = el.text ? el.text.trim() : `[${el.type}]`;
+        onSelectPassage({
+          pageIdx,
+          elementId: el.id,
+          text: passageText,
+          selectedText: highlightedText,
+          bbox: el.bbox,
+          type: el.type,
+          style: el.style || {},
+        });
       }
     }
-
-    setDragBox(null);
   };
 
   const pages = docSummary?.pages || [];
@@ -349,12 +245,11 @@ const ScrollableDocumentViewer = forwardRef(function ScrollableDocumentViewer(
 
                   {/* Canvas + Text Layer Wrapper */}
                   <div
-                    className={`page-canvas-wrapper ${
-                      dragBox?.isDragging && dragBox.pageIdx === pIdx ? 'is-drag-selecting' : ''
-                    }`}
-                    onMouseDown={(e) => handleCanvasMouseDown(e, pIdx)}
-                    onMouseMove={(e) => handleCanvasMouseMove(e, pIdx)}
-                    onMouseUp={(e) => handleCanvasMouseUp(e, pIdx, page)}
+                    className="page-canvas-wrapper"
+                    onClick={() => {
+                      // Clicking background deselects active block
+                      if (selectedPassage) onClearPassage();
+                    }}
                   >
                     {/* Rendered Visual Bitmap */}
                     <img
@@ -388,31 +283,24 @@ const ScrollableDocumentViewer = forwardRef(function ScrollableDocumentViewer(
                               height: `${heightPct}%`,
                             }}
                             onClick={(e) => handleBlockClick(e, pIdx, el)}
-                            title={el.text ? `${el.type}: "${el.text.slice(0, 50)}..."` : `${el.type}`}
+                            onMouseUp={(e) => handleBlockMouseUp(e, pIdx, el)}
+                            title={el.text ? `${el.type} (${el.id}): "${el.text.slice(0, 50)}..."` : `${el.type} (${el.id})`}
                           >
                             <span className="selectable-text-content">{el.text}</span>
+                            {isThisBlockSelected && (
+                              <div className="doc-block-selection-pill">
+                                <span>
+                                  {selectedPassage?.selectedText ? `“${selectedPassage.selectedText}”` : el.id}
+                                </span>
+                              </div>
+                            )}
                           </div>
                         );
                       })}
                     </div>
 
-                    {/* Live Drag Marquee Box Preview */}
-                    {dragBox && dragBox.isDragging && dragBox.pageIdx === pIdx && (
-                      <div
-                        className="selection-drag-box"
-                        style={{
-                          left: `${Math.min(dragBox.startX, dragBox.currentX)}px`,
-                          top: `${Math.min(dragBox.startY, dragBox.currentY)}px`,
-                          width: `${Math.abs(dragBox.currentX - dragBox.startX)}px`,
-                          height: `${Math.abs(dragBox.currentY - dragBox.startY)}px`,
-                        }}
-                      >
-                        <div className="selection-drag-badge">Selecting Region</div>
-                      </div>
-                    )}
-
-                    {/* Active Passage Highlight Overlay (if selection is from drag/non-block) */}
-                    {isPassageOnThisPage && selectedPassage.bbox && selectedPassage.bbox.length === 4 && (
+                    {/* Active Passage Highlight Overlay (if selection is from non-block) */}
+                    {isPassageOnThisPage && selectedPassage.bbox && selectedPassage.bbox.length === 4 && !page.elements?.some(e => e.id === selectedPassage.elementId) && (
                       <div
                         className="passage-focus-overlay"
                         style={{
@@ -432,25 +320,31 @@ const ScrollableDocumentViewer = forwardRef(function ScrollableDocumentViewer(
                     )}
 
                     {/* Citation Grounding Box */}
-                    {isCitationOnThisPage && activeCitation.bbox && activeCitation.bbox.length === 4 && (
-                      <div
-                        className="citation-grounding-overlay"
-                        style={{
-                          left: `${(activeCitation.bbox[0] / docW) * 100}%`,
-                          top: `${(activeCitation.bbox[1] / docH) * 100}%`,
-                          width: `${((activeCitation.bbox[2] - activeCitation.bbox[0]) / docW) * 100}%`,
-                          height: `${Math.max(
-                            ((activeCitation.bbox[3] - activeCitation.bbox[1]) / docH) * 100,
-                            2.5
-                          )}%`,
-                        }}
-                      >
-                        <div className="citation-grounding-tag">
-                          <MapPin size={10} />
-                          <span>{activeCitation.label || `Page ${pIdx + 1}`}</span>
+                    {isCitationOnThisPage && activeCitation.bbox && activeCitation.bbox.length === 4 && (() => {
+                      const isNearTop = (activeCitation.bbox[1] / docH) < 0.04;
+                      return (
+                        <div
+                          className="citation-grounding-overlay"
+                          style={{
+                            left: `${(activeCitation.bbox[0] / docW) * 100}%`,
+                            top: `${(activeCitation.bbox[1] / docH) * 100}%`,
+                            width: `${((activeCitation.bbox[2] - activeCitation.bbox[0]) / docW) * 100}%`,
+                            height: `${Math.max(
+                              ((activeCitation.bbox[3] - activeCitation.bbox[1]) / docH) * 100,
+                              2.5
+                            )}%`,
+                          }}
+                        >
+                          <div
+                            className="citation-grounding-tag"
+                            style={isNearTop ? { top: 'auto', bottom: '-22px' } : undefined}
+                          >
+                            <MapPin size={10} />
+                            <span>{activeCitation.label || `Page ${pIdx + 1}`}</span>
+                          </div>
                         </div>
-                      </div>
-                    )}
+                      );
+                    })()}
                   </div>
                 </div>
               );

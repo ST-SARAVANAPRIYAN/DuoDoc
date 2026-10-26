@@ -25,6 +25,9 @@ class ElementStyle:
     letter_spacing: float = 0.0  # letter spacing / tracking offset in pt
     indent: float = 0.0  # left indentation in pt
     highlight: bool = False
+    subscript: bool = False
+    superscript: bool = False
+    text_case: Optional[str] = None  # "uppercase", "lowercase", "capitalize"
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -45,7 +48,10 @@ class ElementStyle:
             line_spacing=float(data.get("line_spacing", 1.15)),
             letter_spacing=float(data.get("letter_spacing", 0.0)),
             indent=float(data.get("indent", 0.0)),
-            highlight=data.get("highlight", False)
+            highlight=data.get("highlight", False),
+            subscript=data.get("subscript", False),
+            superscript=data.get("superscript", False),
+            text_case=data.get("text_case")
         )
 
 

@@ -17,13 +17,24 @@ from PIL import Image
 
 from config import RENDERS_DIR, DEVICE
 from schema import UnifiedDocument, DocumentPage, DocumentElement
-from schemas import QARequest, QAResponse, ManipulateRequest, ManipulateResponse
-from render import render_canvas
+from schemas import (
+    QARequest,
+    QAResponse,
+    ManipulateRequest,
+    ManipulateResponse,
+    CheckpointActionRequest,
+    CheckpointActionResponse
+)
+from render import render_canvas, render_native_office_page
 from execution import ActionSafetyValidator, SafeAbstentionPolicy, DocumentStateExecutor
 from data import ELEM_TYPE_MAP, INV_OP_MAP, INV_PROP_MAP
 from session_store import (
     get_document,
     store_document,
+    push_checkpoint,
+    undo_checkpoint,
+    redo_checkpoint,
+    get_checkpoint_status,
     get_vlm_engine_instance,
     get_custom_model_bundle,
     get_qwopus_client_instance
@@ -1345,6 +1356,7 @@ def run_qa_streaming(req: QARequest):
 def run_manipulation(req: ManipulateRequest):
     """
     Stage 5B + 6 + 7: Grounded Manipulation, Safety Validation & Visual Re-Rendering.
+    Includes auto-checkpointing for reversible undo/redo calculus.
     """
     doc = get_document(req.document_id)
     if not doc:
@@ -1360,23 +1372,75 @@ def run_manipulation(req: ManipulateRequest):
         orig_img = Image.open(page.image_path).convert("RGB")
 
     start_time = time.perf_counter()
+    pred_target_text = req.target_text
 
-    if req.engine in ("dual-layer-vlm", "qwopus-9b"):
-        vlm = get_vlm_engine_instance()
-        plan = vlm.plan_manipulation(
+    # If explicit target_id and properties are provided (e.g. from canvas selection / toolbar)
+    if req.target_id and req.properties:
+        pred_target_id = req.target_id
+        pred_op = "SET_STYLE"
+        updates_payload = req.properties
+        pred_prop = list(req.properties.keys())[0] if req.properties else "bold"
+        pred_val = req.properties.get(pred_prop, True)
+        confidence = 0.99
+        reasoning = f"Direct canvas element selection for {pred_target_id}."
+        decision = "EXECUTE"
+        latency = (time.perf_counter() - start_time) * 1000.0
+    elif req.engine in ("qwopus-9b", "qwopus"):
+        qwopus = get_qwopus_client_instance()
+        plan = qwopus.plan_manipulation(
             image=orig_img,
             elements=page.elements,
             instruction=req.instruction
         )
         latency = (time.perf_counter() - start_time) * 1000.0
 
-        pred_target_id = plan.get("target_id")
+        pred_target_id = req.target_id if req.target_id else plan.get("target_id")
+        pred_target_text = req.target_text if req.target_text else plan.get("target_text")
         pred_op = plan.get("operation", "SET_STYLE")
         pred_prop = plan.get("property", "bold")
         pred_val = plan.get("value", "true")
         confidence = float(plan.get("confidence", 0.90))
         reasoning = plan.get("reasoning", "")
         decision = "EXECUTE" if confidence >= 0.70 else "ABSTAIN"
+        updates_payload = plan.get("updates")
+        if req.properties:
+            updates_payload = {**(updates_payload or {}), **req.properties}
+    elif req.engine == "dual-layer-vlm":
+        try:
+            vlm = get_vlm_engine_instance()
+            plan = vlm.plan_manipulation(
+                image=orig_img,
+                elements=page.elements,
+                instruction=req.instruction
+            )
+        except RuntimeError as vram_err:
+            logger.warning(f"VLM VRAM load failed ({vram_err}), using deterministic intent engine.")
+            from models.vlm_engine import extract_intent_directives
+            d = extract_intent_directives(req.instruction, page.elements)
+            plan = {
+                "target_id": d["target_id"] or (page.elements[0].id if page.elements else "e0"),
+                "target_ids": d.get("target_ids"),
+                "target_text": d.get("target_text"),
+                "operation": d["operation"],
+                "property": list(d["updates"].keys())[0] if d["updates"] else "bold",
+                "value": list(d["updates"].values())[0] if d["updates"] else True,
+                "updates": d["updates"],
+                "confidence": 0.95,
+                "reasoning": "Grounded via multimodal structure & intent directives (VRAM-safe mode)."
+            }
+        latency = (time.perf_counter() - start_time) * 1000.0
+
+        pred_target_id = req.target_id if req.target_id else plan.get("target_id")
+        pred_target_text = req.target_text if req.target_text else plan.get("target_text")
+        pred_op = plan.get("operation", "SET_STYLE")
+        pred_prop = plan.get("property", "bold")
+        pred_val = plan.get("value", "true")
+        confidence = float(plan.get("confidence", 0.90))
+        reasoning = plan.get("reasoning", "")
+        decision = "EXECUTE" if confidence >= 0.70 else "ABSTAIN"
+        updates_payload = plan.get("updates")
+        if req.properties:
+            updates_payload = {**(updates_payload or {}), **req.properties}
     else:
         # Custom Compact Model Baseline
         model, tokenizer, val_map, inv_val_map = get_custom_model_bundle()
@@ -1414,7 +1478,7 @@ def run_manipulation(req: ManipulateRequest):
 
         target_idx = outputs["grounding_logits"].argmax(dim=-1).item()
         pred_target_el = page.elements[target_idx] if target_idx < len(page.elements) else page.elements[0]
-        pred_target_id = pred_target_el.id
+        pred_target_id = req.target_id if req.target_id else pred_target_el.id
         pred_op = INV_OP_MAP.get(outputs["operation_logits"].argmax(dim=-1).item(), "SET_STYLE")
         pred_prop = INV_PROP_MAP.get(outputs["property_logits"].argmax(dim=-1).item(), "bold")
         raw_val_idx = outputs["value_logits"].argmax(dim=-1).item()
@@ -1422,27 +1486,56 @@ def run_manipulation(req: ManipulateRequest):
         confidence = 0.85
         reasoning = "Mapped via custom action heads."
         decision = "EXECUTE"
+        updates_payload = req.properties
 
-    # Target element text
-    target_text = None
-    for el in page.elements:
-        if el.id == pred_target_id:
-            target_text = el.text
-            break
+    # Coordinated multi-element group handling (e.g. multi-line title or author block)
+    target_ids = None
+    if "plan" in locals() and isinstance(plan, dict) and plan.get("target_ids"):
+        target_ids = plan.get("target_ids")
+
+    # If instruction targets title or pred_target_id is in title block on page 0
+    if req.page_idx == 0:
+        p0_title_elems = [e for e in page.elements if e.bbox[1] < 125 and (e.type == "heading" or getattr(e.style, "font_size", 0) >= 16)]
+        p0_title_ids = [e.id for e in p0_title_elems]
+        if pred_target_id in p0_title_ids or ("title" in req.instruction.lower() and p0_title_ids):
+            if not target_ids:
+                target_ids = list(p0_title_ids)
+            else:
+                for tid in p0_title_ids:
+                    if tid not in target_ids:
+                        target_ids.append(tid)
+            pred_target_id = p0_title_ids[0]
+            # ONLY default to center if the user did NOT specify an explicit alignment directive
+            has_align_instruction = any(a in req.instruction.lower() for a in ("left", "right", "justify", "center", "align", "algined"))
+            if not has_align_instruction and not (updates_payload and "alignment" in updates_payload):
+                for te in p0_title_elems:
+                    left_m = te.bbox[0]
+                    right_m = (page.width or 595.0) - te.bbox[2]
+                    if abs(left_m - right_m) < ((page.width or 595.0) * 0.12):
+                        te.style.alignment = "center"
+
+    active_ids = target_ids if target_ids else [pred_target_id]
+    matched_texts = [el.text for el in page.elements if el.id in active_ids and el.text]
+    target_text = "\n".join(matched_texts) if matched_texts else None
+
+    # Save checkpoint to undo stack BEFORE mutating
+    push_checkpoint(req.document_id, doc)
 
     # Execute atomic state transition
-    updates_payload = plan.get("updates") if req.engine == "dual-layer-vlm" else None
     mod_doc, audit = DocumentStateExecutor.execute_action(
         doc,
         target_element_id=pred_target_id,
         operation=pred_op,
         property_name=pred_prop,
         value=pred_val,
-        updates=updates_payload
+        updates=updates_payload,
+        target_element_ids=target_ids,
+        target_text=pred_target_text
     )
 
     summary_prop = str(audit.get("property", pred_prop))
     summary_val = str(audit.get("value", pred_val))
+    chk_status = get_checkpoint_status(req.document_id)
 
     if not audit.get("success"):
         return ManipulateResponse(
@@ -1450,7 +1543,7 @@ def run_manipulation(req: ManipulateRequest):
             page_idx=req.page_idx,
             success=False,
             target_element_id=pred_target_id,
-            target_text=target_text,
+            target_text=pred_target_text or target_text,
             operation=pred_op,
             property=summary_prop,
             value=summary_val,
@@ -1461,19 +1554,18 @@ def run_manipulation(req: ManipulateRequest):
             re_rendered_image_url=None,
             latency_ms=round(latency, 2),
             engine=req.engine,
+            undo_count=chk_status["undo_count"],
+            redo_count=chk_status["redo_count"],
+            applied_plans=[],
             error=audit.get("error")
         )
 
-    # Save modified document back to session store
-    mod_doc_id = f"{req.document_id}_modified"
-    store_document(mod_doc_id, mod_doc)
-
-    # Dynamic Canvas Re-Rendering (Stage 7)
+    # Dynamic Canvas Re-Rendering: Faithful non-destructive in-place patch
     re_rendered_canvas = render_canvas(
         mod_doc,
         page_id=req.page_idx,
-        highlight_elem_id=pred_target_id,
-        highlight_box_color="#0284C7"
+        highlight_elem_id=target_ids if target_ids else pred_target_id,
+        draw_border=False
     )
 
     render_folder = RENDERS_DIR / req.document_id
@@ -1482,13 +1574,44 @@ def run_manipulation(req: ManipulateRequest):
     re_rendered_canvas.save(render_folder / mod_img_filename)
 
     rel_url = f"/uploads/renders/{req.document_id}/{mod_img_filename}"
+    if req.page_idx < len(mod_doc.pages):
+        mod_doc.pages[req.page_idx].image_path = str(render_folder / mod_img_filename)
+
+    # Save modified document back to session store (both active and modified keys)
+    store_document(req.document_id, mod_doc)
+    mod_doc_id = f"{req.document_id}_modified"
+    store_document(mod_doc_id, mod_doc)
+
+    # Extract target element bounding box (composite box if group)
+    target_bbox = None
+    if req.page_idx < len(mod_doc.pages):
+        active_ids = target_ids if target_ids else [pred_target_id]
+        matched_bboxes = [el.bbox for el in mod_doc.pages[req.page_idx].elements if el.id in active_ids and el.bbox]
+        if matched_bboxes:
+            target_bbox = [
+                min(b[0] for b in matched_bboxes),
+                min(b[1] for b in matched_bboxes),
+                max(b[2] for b in matched_bboxes),
+                max(b[3] for b in matched_bboxes)
+            ]
+
+    applied_plans = [
+        {
+            "target_id": pred_target_id,
+            "operation": pred_op,
+            "property": summary_prop,
+            "value": summary_val,
+            "updates": updates_payload or {summary_prop: summary_val}
+        }
+    ]
 
     return ManipulateResponse(
         document_id=req.document_id,
         page_idx=req.page_idx,
         success=True,
         target_element_id=pred_target_id,
-        target_text=target_text,
+        target_text=pred_target_text or target_text,
+        target_bbox=target_bbox,
         operation=pred_op,
         property=summary_prop,
         value=summary_val,
@@ -1502,5 +1625,99 @@ def run_manipulation(req: ManipulateRequest):
         re_rendered_image_url=rel_url,
         latency_ms=round(latency, 2),
         engine=req.engine,
+        undo_count=chk_status["undo_count"],
+        redo_count=chk_status["redo_count"],
+        applied_plans=applied_plans,
         error=None
     )
+
+
+@router.post("/manipulate/undo", response_model=CheckpointActionResponse)
+def undo_manipulation(req: CheckpointActionRequest):
+    """
+    Rolls back the document state to the previous checkpoint (Slide 10: Invertible Mutation Calculus).
+    """
+    prev_doc = undo_checkpoint(req.document_id)
+    chk_status = get_checkpoint_status(req.document_id)
+    if not prev_doc:
+        return CheckpointActionResponse(
+            document_id=req.document_id,
+            page_idx=req.page_idx,
+            success=False,
+            undo_count=chk_status["undo_count"],
+            redo_count=chk_status["redo_count"],
+            re_rendered_image_url=None,
+            message="No previous checkpoint available to undo."
+        )
+
+    re_rendered_canvas = render_canvas(prev_doc, page_id=req.page_idx, draw_border=False)
+
+    render_folder = RENDERS_DIR / req.document_id
+    os.makedirs(render_folder, exist_ok=True)
+    mod_img_filename = f"page_{req.page_idx}_undo_{int(time.time())}.png"
+    re_rendered_canvas.save(render_folder / mod_img_filename)
+    rel_url = f"/uploads/renders/{req.document_id}/{mod_img_filename}"
+    if req.page_idx < len(prev_doc.pages):
+        prev_doc.pages[req.page_idx].image_path = str(render_folder / mod_img_filename)
+
+    store_document(req.document_id, prev_doc)
+    store_document(f"{req.document_id}_modified", prev_doc)
+
+    return CheckpointActionResponse(
+        document_id=req.document_id,
+        page_idx=req.page_idx,
+        success=True,
+        undo_count=chk_status["undo_count"],
+        redo_count=chk_status["redo_count"],
+        re_rendered_image_url=rel_url,
+        message="Successfully rolled back to previous checkpoint."
+    )
+
+
+@router.post("/manipulate/redo", response_model=CheckpointActionResponse)
+def redo_manipulation(req: CheckpointActionRequest):
+    """
+    Reapplies the next state from the redo stack.
+    """
+    next_doc = redo_checkpoint(req.document_id)
+    chk_status = get_checkpoint_status(req.document_id)
+    if not next_doc:
+        return CheckpointActionResponse(
+            document_id=req.document_id,
+            page_idx=req.page_idx,
+            success=False,
+            undo_count=chk_status["undo_count"],
+            redo_count=chk_status["redo_count"],
+            re_rendered_image_url=None,
+            message="No redo state available."
+        )
+
+    re_rendered_canvas = render_canvas(next_doc, page_id=req.page_idx, draw_border=False)
+
+    render_folder = RENDERS_DIR / req.document_id
+    os.makedirs(render_folder, exist_ok=True)
+    mod_img_filename = f"page_{req.page_idx}_redo_{int(time.time())}.png"
+    re_rendered_canvas.save(render_folder / mod_img_filename)
+    rel_url = f"/uploads/renders/{req.document_id}/{mod_img_filename}"
+    if req.page_idx < len(next_doc.pages):
+        next_doc.pages[req.page_idx].image_path = str(render_folder / mod_img_filename)
+
+    store_document(req.document_id, next_doc)
+    store_document(f"{req.document_id}_modified", next_doc)
+
+    return CheckpointActionResponse(
+        document_id=req.document_id,
+        page_idx=req.page_idx,
+        success=True,
+        undo_count=chk_status["undo_count"],
+        redo_count=chk_status["redo_count"],
+        re_rendered_image_url=rel_url,
+        message="Successfully reapplied next checkpoint."
+    )
+
+
+@router.get("/manipulate/checkpoints/{doc_id}")
+def get_checkpoints(doc_id: str):
+    """Returns number of available undo and redo steps for doc_id."""
+    return get_checkpoint_status(doc_id)
+

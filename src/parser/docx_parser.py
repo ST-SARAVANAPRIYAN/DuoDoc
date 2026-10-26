@@ -96,7 +96,7 @@ class DocxDocumentParser(BaseDocumentParser):
                 file_path,
                 "--outdir", temp_dir
             ]
-            res = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=75)
             if res.returncode != 0:
                 raise RuntimeError(f"LibreOffice conversion exited with code {res.returncode}: {res.stderr}")
 
@@ -250,7 +250,15 @@ class DocxDocumentParser(BaseDocumentParser):
                     b_mid_x = (b_bbox[0] + b_bbox[2]) / 2.0
                     page_mid_x = page_w / 2.0
                     b_width = b_bbox[2] - b_bbox[0]
-                    if abs(b_mid_x - page_mid_x) < (page_w * 0.08) and b_width < (page_w * 0.75):
+                    left_margin = b_bbox[0]
+                    right_margin = page_w - b_bbox[2]
+                    margin_diff = abs(left_margin - right_margin)
+                    is_centered = (
+                        abs(b_mid_x - page_mid_x) < (page_w * 0.06)
+                        and (b_width < (page_w * 0.72) or margin_diff < (page_w * 0.08))
+                        and left_margin > (page_w * 0.04)
+                    )
+                    if is_centered:
                         elem_alignment = "center"
                     else:
                         elem_alignment = "left"

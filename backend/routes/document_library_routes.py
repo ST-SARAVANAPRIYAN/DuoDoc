@@ -43,6 +43,11 @@ class UpdateDocumentRequest(BaseModel):
     tags: Optional[List[str]] = None
 
 
+class CreateBlankDocumentRequest(BaseModel):
+    title: Optional[str] = "Untitled Document"
+    folder_id: Optional[str] = None
+
+
 class SaveChatMessageRequest(BaseModel):
     role: str
     text: str
@@ -383,6 +388,93 @@ async def import_document(
         "page_count": page_count,
         "folder_id": folder_id,
         "message": f"Successfully imported '{file.filename}' into document library."
+    }
+
+
+@router.post("/create-blank")
+def create_blank_document(
+    req: Optional[CreateBlankDocumentRequest] = None,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Creates a new, blank academic document AST with standard 800x1000 pt canvas,
+    pre-seeded title and paragraph elements, and caches it in MongoDB and memory.
+    """
+    doc_title = (req.title.strip() if req and req.title else "Untitled Document") or "Untitled Document"
+    folder_id = req.folder_id if req else None
+
+    raw_id = f"doc_{int(time.time())}_{os.urandom(3).hex()}"
+    filename = f"{doc_title}.docx"
+
+    renders_dir = os.path.join("uploads", "renders", raw_id)
+    os.makedirs(renders_dir, exist_ok=True)
+    img_path = os.path.join(renders_dir, "page_0.png")
+
+    from schema.document import UnifiedDocument, DocumentPage, DocumentElement, ElementStyle
+    title_elem = DocumentElement(
+        id="heading_0_0",
+        type="heading",
+        page=0,
+        bbox=[114.0, 72.0, 686.0, 110.0],
+        text=doc_title,
+        style=ElementStyle(font_size=24, font_family="LiberationSerif", bold=True, alignment="center")
+    )
+    para_elem = DocumentElement(
+        id="paragraph_0_1",
+        type="paragraph",
+        page=0,
+        bbox=[114.0, 140.0, 686.0, 180.0],
+        text="Start typing your document or instruct the AI assistant to write and format content.",
+        style=ElementStyle(font_size=12, font_family="LiberationSerif", alignment="left")
+    )
+
+    page0 = DocumentPage(
+        page_id=0,
+        width=800.0,
+        height=1000.0,
+        elements=[title_elem, para_elem],
+        image_path=img_path
+    )
+    new_doc = UnifiedDocument(
+        document_id=raw_id,
+        pages=[page0],
+        metadata={"filename": filename}
+    )
+
+    # Render initial blank canvas bitmap
+    canvas_img = render_canvas(new_doc, page_id=0)
+    canvas_img.save(img_path)
+
+    store_document(raw_id, new_doc)
+    store_document(f"{raw_id}_modified", new_doc)
+
+    owner_id = str(current_user.get("id") or current_user.get("_id", "system"))
+    db = get_db()
+    if db is not None:
+        db["documents"].insert_one({
+            "document_id": raw_id,
+            "owner_id": owner_id,
+            "folder_id": folder_id if folder_id and folder_id != "uncategorized" else None,
+            "title": doc_title,
+            "filename": filename,
+            "file_type": "docx",
+            "file_path": "",
+            "file_size": 0,
+            "page_count": 1,
+            "tags": ["docx", "blank-document"],
+            "status": "ready",
+            "uploaded_at": time.time(),
+            "last_opened_at": time.time()
+        })
+
+    return {
+        "document_id": raw_id,
+        "title": doc_title,
+        "filename": filename,
+        "file_type": "docx",
+        "page_count": 1,
+        "folder_id": folder_id,
+        "message": f"Created fresh document '{doc_title}'."
     }
 
 

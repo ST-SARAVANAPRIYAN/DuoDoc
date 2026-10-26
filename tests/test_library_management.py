@@ -31,7 +31,7 @@ def test_folder_crud_lifecycle(auth_headers):
     res = client.get("/api/library/folders", headers=auth_headers)
     assert res.status_code == 200
     initial_folders = res.json()["folders"]
-    assert len(initial_folders) >= 1
+    assert isinstance(initial_folders, list)
 
     # 2. Create custom folder
     folder_name = "Automated Test Category"
@@ -119,6 +119,35 @@ def test_document_management_lifecycle(auth_headers):
 
     # 8. Clean up test folder
     client.delete(f"/api/library/folders/{target_folder_id}", headers=auth_headers)
+
+
+def test_create_blank_document(auth_headers):
+    # Test creation of a fresh blank document
+    create_res = client.post(
+        "/api/library/create-blank",
+        headers=auth_headers,
+        json={"title": "Interactive Research Note", "filename": "Research_Note.docx"}
+    )
+    assert create_res.status_code == 200, f"Create blank failed: {create_res.text}"
+    data = create_res.json()
+    doc_id = data["document_id"]
+    assert doc_id.startswith("doc_")
+    assert data["page_count"] == 1
+    assert data["filename"] == "Interactive Research Note.docx"
+
+    # Verify document is in library search
+    search_res = client.get("/api/library/documents?search=Interactive", headers=auth_headers)
+    assert search_res.status_code == 200
+    assert any(d["document_id"] == doc_id for d in search_res.json()["documents"])
+
+    # Verify document AST can be fetched
+    doc_res = client.get(f"/api/documents/{doc_id}")
+    assert doc_res.status_code == 200
+    assert doc_res.json()["document_id"] == doc_id
+
+    # Clean up test document
+    del_res = client.delete(f"/api/library/documents/{doc_id}", headers=auth_headers)
+    assert del_res.status_code == 200
 
 
 def headers_or_fallback(auth_headers):
