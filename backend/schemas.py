@@ -72,6 +72,7 @@ class ManipulateResponse(BaseModel):
     page_idx: int
     success: bool
     target_element_id: Optional[str] = None
+    target_index: Optional[int] = None
     target_text: Optional[str] = None
     target_bbox: Optional[List[float]] = None
     operation: Optional[str] = None

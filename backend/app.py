@@ -31,6 +31,7 @@ from routes.intelligence_routes import router as intelligence_router
 from routes.export_routes import router as export_router
 from routes.auth_routes import router as auth_router
 from routes.document_library_routes import router as library_router
+from routes.onlyoffice_routes import router as onlyoffice_router
 from database.mongodb import init_db
 
 app = FastAPI(
@@ -52,6 +53,11 @@ app.add_middleware(
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 app.mount("/uploads", StaticFiles(directory=str(UPLOAD_DIR)), name="uploads")
 
+# Mount Static Plugins for ONLYOFFICE Dynamic Plugin Autoloading
+PLUGINS_DIR = BACKEND_DIR / "static" / "plugins"
+os.makedirs(PLUGINS_DIR, exist_ok=True)
+app.mount("/plugins", StaticFiles(directory=str(PLUGINS_DIR)), name="plugins")
+
 # Include Routers
 app.include_router(system_router)
 app.include_router(auth_router)
@@ -59,6 +65,7 @@ app.include_router(library_router)
 app.include_router(document_router)
 app.include_router(intelligence_router)
 app.include_router(export_router)
+app.include_router(onlyoffice_router)
 
 
 @app.on_event("startup")

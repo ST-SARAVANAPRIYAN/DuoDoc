@@ -1,0 +1,24 @@
+{
+  "name": "OneScript Bridge",
+  "guid": "asc.{9FDA57E0-71DF-4658-92DB-30387D3DAC70}",
+  "version": "1.0.0",
+  "variations": [
+    {
+      "description": "AI-Powered Multimodal Document Understanding and Editing Bridge",
+      "url": "index.html",
+      "icons": ["icon.png"],
+      "isViewer": true,
+      "EditorsSupport": ["word", "cell", "slide", "pdf"],
+      "isVisual": true,
+      "isModal": false,
+      "isInsideMode": true,
+      "initDataType": "none",
+      "initData": "",
+      "buttons": [],
+      "events": [
+        "onTargetPositionChanged",
+        "onExternalPluginMessage"
+      ]
+    }
+  ]
+}

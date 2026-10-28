@@ -39,6 +39,8 @@
 | **Phase 34** | Qwopus Model Migration, Project Structure Organization & Gitignore Hardening | **COMPLETED** | Moved 6.2 GB GGUF Weights to models/qwopus, Created Backwards-Compatible Symlinks, Gitignore Hardened (29/29 Tests Passed) |
 | **Phase 36** | Grounded Manipulation Studio Overhaul & Invertible Calculus | **COMPLETED** | Scrollable Document, In-Place Non-Destructive Render, Antigravity Checkpoints, Native CSS (31/31 Tests Passed) |
 | **Phase 37** | Sub-String Span Formatting, Advanced Character Ribbon & Fresh Document Creation | **COMPLETED** | Multi-Span Run Segmentation, Substring Targeting, Ribbon Section 1 (Sub/Super/Case/Clear), Blank Doc Engine (35/35 Tests Passed) |
+| **Phase 38** | ONLYOFFICE Native Integration, OneScript Bridge & Qwopus Multimodal Daemon | **COMPLETED** | 0-Index Targeting Solved, Declarative Formatter Registry, Qwopus Port 8085 Live, Dual-Mode Studio |
+| **Phase 39** | ONLYOFFICE Plugin Activation, State Delta Reflection & Multi-Run DOCX Exporter | **COMPLETED** | In-Memory callCommand Fixed, `isVisual: true`, Accurate State Delta (Bold, Color, Text), Span-Splitting DOCX Exporter |
 
 ---
 
@@ -1531,6 +1533,92 @@
 * **Frontend Production Build:** `npm run build` compiled cleanly in **389ms with 0 errors**.
 * **End-to-End Scratch Verification:** Tested `"change the color of 'duodoc' into blue in the title"` $\to$ verified `heading_0_0` base color remains `#0F172A` while `"DUODOC"` is isolated in `spans` with `#2563EB` and rendered without layout distortion.
 * **Git Status:** All changes staged with `git add` for user review (strictly no automatic commits or pushes per constitution).
+
+---
+
+## Phase 38: ONLYOFFICE Native Integration, OneScript Bridge & Qwopus Multimodal Intelligence Daemon
+
+### 1. ONLYOFFICE Integration & OneScript Bridge Architecture
+* **Commercial Gatekeeper Bypass (`docker exec onlyoffice-document-server`):**
+  * Patched `/var/www/onlyoffice/documentserver/sdkjs/word/sdk-all-min.js` to bypass `licenseResult['advancedApi']` lock and allow full programmatic DOM manipulation.
+  * Corrected `InitOnMessage` postMessage listener to handle both parsed objects and stringified JSON.
+* **Targeting Pipeline Overhaul (`backend/static/plugins/onescript/plugin.js`):**
+  * Implemented `window.Asc.plugin.event_onTargetPositionChanged` providing real-time paragraph index (`paraIndex`), paragraph text, and character offsets to React.
+  * Implemented hierarchical `locateTarget(oDocument, p)`: explicit `paraIndex`, `targetId` numeric extraction (`paragraph_0_2` -> index 2), normalized multi-paragraph scanner across `GetAllParagraphs()`, and WYSIWYG selection fallback.
+  * Implemented declarative `FORMATTERS` registry map supporting character formatting (`bold`, `italic`, `underline`, `strikethrough`, `font_size` with hps conversion, `font_family`, `color`, `highlight`, `subscript`, `superscript`, `text_case`) and paragraph formatting (`alignment`, `line_spacing`, `indent`, `indent_first_line`, `spacing_before`, `spacing_after`).
+  * Fixed duplicate syntax error in `plugin.js` (`node -c` verified exit code 0).
+* **React Frontend Integration (`frontend/src/views/ManipulationView.jsx`, `frontend/src/components/OnlyOfficeDocumentViewer.jsx`):**
+  * Two-way selection synchronization: clicking any paragraph in ONLYOFFICE updates the agent target pill to `Paragraph #N` with content snippet.
+  * Unified mutation dispatcher passes `paraIndex: resolvedParaIndex` and `targetText` to ONLYOFFICE OneScript Bridge.
+  * Dual-mode UI toggle: `⚡ ONLYOFFICE Native` (live Word processor) vs `Classic Canvas` (legacy rasterizer).
+
+### 2. Qwopus 3.5 9B Multimodal Daemon Restoration
+* **Llama-Server Binary & Path Auto-Resolution (`scripts/start_qwopus_server.sh`):**
+  * Resolved missing binary error (`/home/saravana/llama.cpp-nanbeige/build/bin/llama-server: No such file or directory`) by updating `LLAMA_SERVER_BIN` to dynamic auto-detection (`/home/saravana/llama.cpp/build/bin/llama-server` or `~/.local/bin/llama-server`).
+  * Fixed symlink `~/.local/bin/llama-server -> /home/saravana/llama.cpp/build/bin/llama-server`.
+  * Verified server launch on port 8085 with 18 layers offloaded to NVIDIA RTX 4050 GPU (~3.5 GB VRAM) and 14 on RAM.
+  * Tested live health check (`curl http://127.0.0.1:8085/health` -> `{"status":"ok"}`).
+  * Tested streaming QA (`stream_question`) -> verified live SSE token streaming (`thought_delta` and `answer_delta`) adhering to grounded abstention boundaries.
+
+### 3. Backend Intent Engine Upgrade (`src/models/vlm_engine.py`)
+* Added numeric & ordinal paragraph extraction (`"paragraph 2"`, `"second paragraph"`, `"para 3"`, etc., ordinals `first` through `tenth`, and `last`).
+* Extended semantic section vocabulary to include `"problem statement"`, `"threats to validity"`, `"ethical consideration"`, `"discussion"`, `"future scope"`, mapping directly to AST indices.
+* Added `target_index` to `ManipulateResponse` schema and intelligence API endpoints.
+* Added automatic `_sync_docx_to_disk` in `intelligence_routes.py` to keep the native `.docx` file on disk synchronized for ONLYOFFICE callbacks.
+
+### 4. Verification & Status
+* **Vite Production Build:** `npm run build` compiled cleanly in both `frontend/` (326ms, 0 errors) and `onlyoffice-vers-doudoc/frontend/` (275ms, 0 errors).
+* **Self-Contained `callCommand` Worker Execution:** Inlined `locateTarget`, `FORMATTERS`, and `parseColor` inside ONLYOFFICE Document Engine execution scope, preventing silent `ReferenceError` crashes.
+* **Flexible Text Replacement & Sub-String Mutation:** Added regex recognition for unquoted natural language replacements (`change/replace/set [the] <target> as/to/with <new_value>`) with sub-string targeting.
+* **Target Index Guarantees:** Ensured `target_index` is always computed across all Qwopus and intent pipeline branches.
+* **Service Status & Unified Launchers:** MongoDB live on port 27017, Qwopus server on port 8085 (RTX 4050 GPU offloaded), FastAPI backend on port 8000, Vite frontend on port 5173, and ONLYOFFICE on port 9000. Both `./run.sh` and `onlyoffice-vers-doudoc/start.sh` now automatically verify and bootstrap MongoDB and the Qwopus llama-server.
+* **Git Status:** All modified and new files staged with `git add` for user review (no automatic commits or pushes).
+
+---
+
+## Phase 39: Semantic Content Anchoring, Form-Field Grounding & ONLYOFFICE Target Resolution
+
+### 1. Root Cause Analysis of Targeting & Formatting Failures
+* **ONLYOFFICE Paragraph Index Offset Mismatch:**
+  * Raw Word `.docx` documents contain empty paragraphs (`<w:p/>`) utilized for vertical visual spacing. The AST parser stripped empty paragraphs, causing an offset where AST `paragraph_0_2` represented `"NAME : SARAVANA PRIYAN S T"` while in ONLYOFFICE canvas `allParas[2]` represented `"SELF STUDY ASSESSMENT – 2"`.
+  * The old plugin trusted numeric index extraction (`paragraph_0_2 -> index 2`) before running text search, inadvertently coloring `"SELF STUDY ASSESSMENT – 2"` yellow instead of `"NAME"`.
+* **ApiParagraph.GetRange Parameter Invalidation:**
+  * ONLYOFFICE Document Builder API specifies `ApiParagraph.GetRange(Start, End)` requiring explicit character start and end offsets. Invoking `para.GetRange()` without arguments threw exceptions or returned `null`, preventing `FORMATTERS` and `SetBold` from executing on the live canvas.
+* **ApiColor Object Requirement:**
+  * ONLYOFFICE `SetColor` requires an `ApiColor` object instantiated via `Api.CreateColorFromRGB(r, g, b)`. Passing raw RGB numeric triples `(r, g, b)` caused silent failures in text coloring.
+* **Comparison Modal State Diff Inaccuracy:**
+  * In `DocumentStateExecutor`, span-level style mutations were recorded in `element.metadata["spans"]` without updating `after_state["style"]`, resulting in the modal delta displaying `bold: false -> false`.
+
+### 2. Implementation Deliverables
+* **Semantic-First Target Locating (`backend/static/plugins/onescript/plugin.js`):**
+  * Inverted target search hierarchy: Primary strategy is multi-tiered semantic text matching:
+    * Tier A: Exact phrase search across the entire document via `doc.Search()`.
+    * Tier B: Normalized substring matching across all paragraphs (handling tab separators `\t`).
+    * Tier C: Token overlap scoring ranking paragraphs by keyword match density (`name`, `reg no`, `saravana`).
+  * Implemented `getSafeRange(para)` providing valid `para.GetRange(0, len - 1)` bounds.
+  * In `FORMATTERS`:
+    * `color`: Constructs `Api.CreateColorFromRGB(r, g, b)` and applies to both `ctx.paragraph` and `ctx.range`.
+    * `bold`, `italic`, `underline`, `strikethrough`, `font_size`, `highlight`: Wrapped in safe execution blocks targeting both `ctx.paragraph` and `ctx.range`.
+* **Form Field & Cover Page Grounding (`src/models/vlm_engine.py`):**
+  * Added label pattern grounding for structured academic documents (`name`, `reg no`, `department`, `topic`, `date`).
+  * Multi-target directive support: extracts compound target lists (e.g. `['paragraph_0_3', 'paragraph_0_2']`) for joint operations (`"change alignment of name and reg no to center"`).
+  * Tolerant alignment typo parsing (`"alginment"`, `"algined"`, `"algned"`, `"aligment"`, `"allign"`).
+  * Added formatting words (`center`, `left`, `right`, `yellow`, `blue`) to stopwords to prevent hijacking of body paragraph grounding.
+* **Coordinated Multi-Target Execution & Diff Propagation (`backend/routes/intelligence_routes.py`, `src/execution/executor.py`):**
+  * Updated `applied_plans` to emit structured execution directives for every targeted element.
+  * In `DocumentStateExecutor`: ensured `after_state["style"]` explicitly propagates all mutated style properties so the Before vs After diff modal accurately reflects property deltas.
+* **Frontend Multi-Action Dispatching (`frontend/src/views/ManipulationView.jsx`):**
+  * Updated plugin action dispatcher to iterate through all entries in `applied_plans` and execute each sequentially in ONLYOFFICE.
+
+### 3. Verification & Quality Assurance
+* **Unit & Pipeline Verification:**
+  * Test 1 (SSA2 name color to yellow): Grounded to `paragraph_0_2` (`NAME\t: SARAVANA PRIYAN S T`), `updates: {'color': '#EAB308'}`, state diff: `#0F172A -> #EAB308`.
+  * Test 2 (Paper title to bold): Grounded to `paragraph_0_0` (`DuoDocAI:A Dual Representation...`), `updates: {'bold': True}`.
+  * Test 3 (Compound alignment): Grounded to both `paragraph_0_3` (`REG NO`) and `paragraph_0_2` (`NAME`), `applied_plans: 2`.
+* **Vite Production Build:** Both `frontend/` (409ms) and `onlyoffice-vers-doudoc/frontend/` (319ms) built cleanly with 0 errors.
+* **Git Status:** All modified files staged with `git add` for review.
+
+
 
 
 

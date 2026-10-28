@@ -15,11 +15,16 @@ import {
 } from '../api/client';
 import { getDocuments, createBlankDocument } from '../api/libraryApi';
 import ScrollableDocumentViewer from '../components/ScrollableDocumentViewer';
+import OnlyOfficeDocumentViewer from '../components/OnlyOfficeDocumentViewer';
 
 export default function ManipulationView({ activeEngine, selectedDocument, onBackToLibrary }) {
   // Document State
   const [docSummary, setDocSummary] = useState(null);
   const [origPages, setOrigPages] = useState([]); // original unmodified pages backup
+
+  // Editor Engine: 'onlyoffice' (Native WebAssembly Word Processor) | 'canvas' (Legacy PIL)
+  const [editorEngine, setEditorEngine] = useState('onlyoffice');
+  const onlyOfficeRef = useRef(null);
 
   // View & Inspection Modes
   const [viewMode, setViewMode] = useState('modified'); // 'modified' | 'original'
@@ -323,6 +328,45 @@ export default function ManipulationView({ activeEngine, selectedDocument, onBac
       setViewMode('modified');
       setHighlightChanges(true);
 
+      // Forward planned mutation directly to ONLYOFFICE OneScript Bridge if active
+      if (editorEngine === 'onlyoffice' && onlyOfficeRef.current) {
+        const plansToExecute = (res.applied_plans && res.applied_plans.length > 0)
+          ? res.applied_plans
+          : [{
+              target_id: res.target_element_id,
+              target_text: res.target_text,
+              operation: res.operation,
+              property: res.property,
+              value: res.value,
+              updates: res.applied_plans?.[0]?.updates || (res.property ? { [res.property]: res.value } : {})
+            }];
+
+        plansToExecute.forEach((pPlan, pIdx) => {
+          const targetEl = docSummary?.pages?.[targetPageIdx]?.elements?.find(
+            (e) => e.id === pPlan.target_id
+          );
+          const resolvedTargetText = pPlan.target_text || targetEl?.text || (pIdx === 0 ? selectedPassage?.selectedText : null) || null;
+          const resolvedUpdates = {
+            ...(pPlan.updates || {}),
+            ...(pPlan.property ? { [pPlan.property]: pPlan.value } : {}),
+          };
+          const resolvedNewText = resolvedUpdates.text || pPlan.value || '';
+
+          onlyOfficeRef.current.executePluginAction({
+            action: pPlan.operation || res.operation || 'SET_STYLE',
+            paraIndex: selectedPassage?.paraIndex ?? res.target_index ?? null,
+            targetText: resolvedTargetText,
+            targetId: pPlan.target_id || res.target_element_id || selectedPassage?.elementId || null,
+            property: pPlan.property || res.property,
+            value: pPlan.value ?? res.value,
+            updates: resolvedUpdates,
+            newText: resolvedNewText,
+            bold: (pPlan.property || res.property) === 'bold' ? (pPlan.value === true || String(pPlan.value).toLowerCase() === 'true') : Boolean(resolvedUpdates.bold),
+            fontSize: (pPlan.property || res.property) === 'font_size' ? pPlan.value : (resolvedUpdates.font_size || null),
+          });
+        });
+      }
+
       // Update docSummary page image & in-memory element styles
       if (res.re_rendered_image_url) {
         setDocSummary((prev) => {
@@ -419,6 +463,10 @@ export default function ManipulationView({ activeEngine, selectedDocument, onBac
 
         setLastMutationResult(null);
 
+        if (editorEngine === 'onlyoffice' && onlyOfficeRef.current) {
+          onlyOfficeRef.current.reload();
+        }
+
         setMessages((prev) => [
           ...prev,
           {
@@ -463,6 +511,10 @@ export default function ManipulationView({ activeEngine, selectedDocument, onBac
             }
             return { ...prev, pages: updatedPages };
           });
+        }
+
+        if (editorEngine === 'onlyoffice' && onlyOfficeRef.current) {
+          onlyOfficeRef.current.reload();
         }
 
         setMessages((prev) => [
@@ -598,6 +650,45 @@ export default function ManipulationView({ activeEngine, selectedDocument, onBac
       setLastMutationResult(mutResult);
       setViewMode('modified');
       setHighlightChanges(true);
+
+      // Forward planned mutation directly to ONLYOFFICE OneScript Bridge if active
+      if (editorEngine === 'onlyoffice' && onlyOfficeRef.current) {
+        const plansToExecute = (res.applied_plans && res.applied_plans.length > 0)
+          ? res.applied_plans
+          : [{
+              target_id: res.target_element_id,
+              target_text: res.target_text,
+              operation: res.operation,
+              property: res.property,
+              value: res.value,
+              updates: res.applied_plans?.[0]?.updates || (res.property ? { [res.property]: res.value } : {})
+            }];
+
+        plansToExecute.forEach((pPlan, pIdx) => {
+          const targetEl = docSummary?.pages?.[targetPageIdx]?.elements?.find(
+            (e) => e.id === pPlan.target_id
+          );
+          const resolvedTargetText = pPlan.target_text || targetEl?.text || (pIdx === 0 ? selectedPassage?.selectedText : null) || null;
+          const resolvedUpdates = {
+            ...(pPlan.updates || {}),
+            ...(pPlan.property ? { [pPlan.property]: pPlan.value } : {}),
+          };
+          const resolvedNewText = resolvedUpdates.text || pPlan.value || '';
+
+          onlyOfficeRef.current.executePluginAction({
+            action: pPlan.operation || res.operation || 'SET_STYLE',
+            paraIndex: selectedPassage?.paraIndex ?? res.target_index ?? null,
+            targetText: resolvedTargetText,
+            targetId: pPlan.target_id || res.target_element_id || selectedPassage?.elementId || null,
+            property: pPlan.property || res.property,
+            value: pPlan.value ?? res.value,
+            updates: resolvedUpdates,
+            newText: resolvedNewText,
+            bold: (pPlan.property || res.property) === 'bold' ? (pPlan.value === true || String(pPlan.value).toLowerCase() === 'true') : Boolean(resolvedUpdates.bold),
+            fontSize: (pPlan.property || res.property) === 'font_size' ? pPlan.value : (resolvedUpdates.font_size || null),
+          });
+        });
+      }
 
       if (res.re_rendered_image_url) {
         setDocSummary((prev) => {
@@ -816,9 +907,10 @@ export default function ManipulationView({ activeEngine, selectedDocument, onBac
             LEFT PANE: SCROLLABLE MAIN DOCUMENT WINDOW
             ========================================================================= */}
         <div className="viewer-pane">
-          {/* Document Editor Ribbon Toolbar (Word / LibreOffice Style) */}
-          <div className="editor-ribbon-bar">
-            {/* History Controls */}
+          {/* Document Editor Ribbon Toolbar (Active only in Classic Canvas mode; deprecated in ONLYOFFICE mode) */}
+          {editorEngine === 'canvas' && (
+            <div className="editor-ribbon-bar">
+              {/* History Controls */}
             <div className="ribbon-group" title="Checkpoint History">
               <button
                 type="button"
@@ -1251,54 +1343,97 @@ export default function ManipulationView({ activeEngine, selectedDocument, onBac
               )}
             </div>
           </div>
+          )}
 
           {/* Main Document Window Manipulation Toolbar */}
           <div className="manipulation-toolbar">
             <div className="toolbar-controls-group">
-              {/* View Mode Toggle: Modified vs Original */}
-              <div className="toolbar-segmented-group">
+              {/* Target Indicator Pill */}
+              <div className="ribbon-target-group">
                 <button
                   type="button"
-                  className={`toolbar-segmented-btn ${viewMode === 'modified' ? 'active' : ''}`}
-                  onClick={() => handleSwitchViewMode('modified')}
-                  title="Show Modified Document (Current State)"
+                  className={`ribbon-target-pill ${selectedPassage ? 'target-active' : ''}`}
+                  onClick={() => setShowInspector(!showInspector)}
+                  title="Click to toggle full Format & Style Inspector"
                 >
-                  <Sparkles size={11} />
-                  <span>Current (Modified)</span>
+                  <span className="dot-indicator" style={{ background: selectedPassage ? '#10B981' : '#EAB308' }} />
+                  <span className="target-pill-text">
+                    {selectedPassage
+                      ? (selectedPassage.selectedText
+                          ? `🎯 ${selectedPassage.type}: “${selectedPassage.selectedText.length > 18 ? selectedPassage.selectedText.slice(0, 16) + '…' : selectedPassage.selectedText}”`
+                          : `${selectedPassage.type}: ${selectedPassage.elementId}`)
+                      : 'Target: Document Title'}
+                  </span>
+                  <Sliders size={11} className="target-inspect-icon" />
                 </button>
-                <button
-                  type="button"
-                  className={`toolbar-segmented-btn ${viewMode === 'original' ? 'active' : ''}`}
-                  onClick={() => handleSwitchViewMode('original')}
-                  title="Show Original Unmodified Document"
-                >
-                  <History size={11} />
-                  <span>Original (Before)</span>
-                </button>
+
+                {selectedPassage && (
+                  <button
+                    type="button"
+                    className="clear-target-btn"
+                    onClick={() => setSelectedPassage(null)}
+                    title="Deselect element"
+                  >
+                    <X size={12} />
+                  </button>
+                )}
               </div>
 
-              {/* Highlight Changes Toggle */}
-              <button
-                type="button"
-                className={`toolbar-toggle-btn ${highlightChanges ? 'active' : ''}`}
-                onClick={() => setHighlightChanges((h) => !h)}
-                title="Toggle visual spotlight on modified elements"
-              >
-                {highlightChanges ? <Eye size={12} /> : <EyeOff size={12} />}
-                <span>Highlight Changes</span>
-              </button>
+              {/* ONLYOFFICE Document Info Badge */}
+              {editorEngine === 'onlyoffice' && docSummary && (
+                <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.72rem', color: 'var(--text-dim)', paddingLeft: '0.5rem' }}>
+                  <FileText size={12} color="#38BDF8" />
+                  <span style={{ fontWeight: 500, color: 'var(--text-normal)' }}>{docSummary.filename}</span>
+                  <span style={{ opacity: 0.6 }}>({docSummary.page_count} pages)</span>
+                </div>
+              )}
 
-              {/* Compare Region Button (Active when mutation exists) */}
-              <button
-                type="button"
-                className="toolbar-compare-btn"
-                disabled={!lastMutationResult}
-                onClick={() => setShowComparisonModal(true)}
-                title={lastMutationResult ? 'Open Before vs After comparison of the modified region' : 'Execute an edit to enable comparison'}
-              >
-                <Split size={12} />
-                <span>Compare Region</span>
-              </button>
+              {/* Legacy Canvas Controls (Shown only in Classic Canvas mode) */}
+              {editorEngine === 'canvas' && (
+                <>
+                  <div className="toolbar-segmented-group">
+                    <button
+                      type="button"
+                      className={`toolbar-segmented-btn ${viewMode === 'modified' ? 'active' : ''}`}
+                      onClick={() => handleSwitchViewMode('modified')}
+                      title="Show Modified Document (Current State)"
+                    >
+                      <Sparkles size={11} />
+                      <span>Current (Modified)</span>
+                    </button>
+                    <button
+                      type="button"
+                      className={`toolbar-segmented-btn ${viewMode === 'original' ? 'active' : ''}`}
+                      onClick={() => handleSwitchViewMode('original')}
+                      title="Show Original Unmodified Document"
+                    >
+                      <History size={11} />
+                      <span>Original (Before)</span>
+                    </button>
+                  </div>
+
+                  <button
+                    type="button"
+                    className={`toolbar-toggle-btn ${highlightChanges ? 'active' : ''}`}
+                    onClick={() => setHighlightChanges((h) => !h)}
+                    title="Toggle visual spotlight on modified elements"
+                  >
+                    {highlightChanges ? <Eye size={12} /> : <EyeOff size={12} />}
+                    <span>Highlight Changes</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    className="toolbar-compare-btn"
+                    disabled={!lastMutationResult}
+                    onClick={() => setShowComparisonModal(true)}
+                    title={lastMutationResult ? 'Open Before vs After comparison of the modified region' : 'Execute an edit to enable comparison'}
+                  >
+                    <Split size={12} />
+                    <span>Compare Region</span>
+                  </button>
+                </>
+              )}
             </div>
 
             {/* Checkpoint Status Indicator */}
@@ -1308,18 +1443,81 @@ export default function ManipulationView({ activeEngine, selectedDocument, onBac
                 <span>{checkpointsList.length} Checkpoints Recorded</span>
               </div>
             )}
+
+            {/* Editor Engine Switcher: ONLYOFFICE vs Classic Canvas */}
+            <div className="toolbar-controls-group" style={{ marginLeft: 'auto' }}>
+              <div style={{ display: 'inline-flex', background: 'rgba(0,0,0,0.3)', padding: '2px', borderRadius: '4px', border: '1px solid var(--border-color)' }}>
+                <button
+                  type="button"
+                  style={{
+                    fontSize: '0.68rem',
+                    padding: '2px 8px',
+                    borderRadius: '3px',
+                    background: editorEngine === 'onlyoffice' ? 'var(--primary)' : 'transparent',
+                    color: editorEngine === 'onlyoffice' ? 'white' : 'var(--text-dim)',
+                    border: 'none',
+                    cursor: 'pointer',
+                    fontWeight: 600,
+                  }}
+                  onClick={() => setEditorEngine('onlyoffice')}
+                  title="Switch to Native ONLYOFFICE WebAssembly Word Processor (Zero Lag)"
+                >
+                  ⚡ ONLYOFFICE Native
+                </button>
+                <button
+                  type="button"
+                  style={{
+                    fontSize: '0.68rem',
+                    padding: '2px 8px',
+                    borderRadius: '3px',
+                    background: editorEngine === 'canvas' ? 'var(--primary)' : 'transparent',
+                    color: editorEngine === 'canvas' ? 'white' : 'var(--text-dim)',
+                    border: 'none',
+                    cursor: 'pointer',
+                    fontWeight: 600,
+                  }}
+                  onClick={() => setEditorEngine('canvas')}
+                  title="Switch to Legacy Static Canvas Rasterizer"
+                >
+                  Classic Canvas
+                </button>
+              </div>
+            </div>
           </div>
 
-          {/* Continuous Scrollable Document Viewer */}
-          <ScrollableDocumentViewer
-            ref={viewerRef}
-            docSummary={currentDisplayDocSummary}
-            selectedPassage={selectedPassage}
-            onSelectPassage={handleSelectPassage}
-            onClearPassage={() => setSelectedPassage(null)}
-            activeCitation={activeCitation}
-            onAskAboutPassage={() => textareaRef.current?.focus()}
-          />
+          {/* Document Workspace Center View */}
+          {editorEngine === 'onlyoffice' && docSummary ? (
+            <OnlyOfficeDocumentViewer
+              ref={onlyOfficeRef}
+              documentId={docSummary?.document_id}
+              onSelectionChange={(sel) => {
+                if (sel && (sel.text || sel.paraIndex !== null || sel.paraText)) {
+                  const displayText = sel.text || (sel.paraText ? sel.paraText.trim().substring(0, 45) + (sel.paraText.length > 45 ? '...' : '') : `Paragraph #${(sel.paraIndex ?? 0) + 1}`);
+                  setSelectedPassage({
+                    elementId: sel.paraIndex !== null ? `paragraph_0_${sel.paraIndex}` : 'selection',
+                    paraIndex: sel.paraIndex,
+                    type: 'paragraph',
+                    text: displayText,
+                    selectedText: sel.text || null,
+                    fullParaText: sel.paraText || null,
+                    pageIdx: 0,
+                  });
+                } else {
+                  setSelectedPassage(null);
+                }
+              }}
+            />
+          ) : (
+            <ScrollableDocumentViewer
+              ref={viewerRef}
+              docSummary={currentDisplayDocSummary}
+              selectedPassage={selectedPassage}
+              onSelectPassage={handleSelectPassage}
+              onClearPassage={() => setSelectedPassage(null)}
+              activeCitation={activeCitation}
+              onAskAboutPassage={() => textareaRef.current?.focus()}
+            />
+          )}
         </div>
 
         {/* =========================================================================
@@ -1863,36 +2061,58 @@ export default function ManipulationView({ activeEngine, selectedDocument, onBac
               </button>
             </div>
 
-            {/* Side-by-side Visual Inspection Cards */}
-            <div className="comparison-split-grid">
-              {/* Left: Original Before */}
-              <div className="comparison-pane-card">
-                <div className="comparison-pane-header before">
-                  <span>BEFORE (ORIGINAL)</span>
-                  <span>Unmodified Baseline</span>
+            {/* Inspection View: ONLYOFFICE Native Delta or Classic Side-by-side PIL */}
+            {editorEngine === 'canvas' ? (
+              <div className="comparison-split-grid">
+                {/* Left: Original Before */}
+                <div className="comparison-pane-card">
+                  <div className="comparison-pane-header before">
+                    <span>BEFORE (ORIGINAL)</span>
+                    <span>Unmodified Baseline</span>
+                  </div>
+                  <div className="comparison-img-frame">
+                    <img
+                      src={lastMutationResult.before_image_url || origPages[lastMutationResult.page_idx ?? 0]?.image_url}
+                      alt="Original Before"
+                    />
+                  </div>
                 </div>
-                <div className="comparison-img-frame">
-                  <img
-                    src={lastMutationResult.before_image_url || origPages[lastMutationResult.page_idx ?? 0]?.image_url}
-                    alt="Original Before"
-                  />
-                </div>
-              </div>
 
-              {/* Right: Modified After */}
-              <div className="comparison-pane-card">
-                <div className="comparison-pane-header after">
-                  <span>AFTER (MODIFIED)</span>
-                  <span>Applied &amp; Verified</span>
-                </div>
-                <div className="comparison-img-frame">
-                  <img
-                    src={lastMutationResult.re_rendered_image_url}
-                    alt="Modified After"
-                  />
+                {/* Right: Modified After */}
+                <div className="comparison-pane-card">
+                  <div className="comparison-pane-header after">
+                    <span>AFTER (MODIFIED)</span>
+                    <span>Applied &amp; Verified</span>
+                  </div>
+                  <div className="comparison-img-frame">
+                    <img
+                      src={lastMutationResult.re_rendered_image_url}
+                      alt="Modified After"
+                    />
+                  </div>
                 </div>
               </div>
-            </div>
+            ) : (
+              <div style={{ margin: '1rem 0', padding: '1rem', background: 'rgba(15, 23, 42, 0.6)', borderRadius: '6px', border: '1px solid var(--border-color)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.8rem' }}>
+                  <Sparkles size={16} color="#38BDF8" />
+                  <span style={{ fontWeight: 600, fontSize: '0.85rem', color: '#F8FAFC' }}>
+                    ONLYOFFICE Native Canvas Mutation
+                  </span>
+                </div>
+                <div style={{ fontSize: '0.78rem', color: 'var(--text-dim)', marginBottom: '0.6rem' }}>
+                  <strong>Mutation Directive:</strong> <code style={{ color: '#38BDF8' }}>{lastMutationResult.instruction || lastMutationResult.reasoning}</code>
+                </div>
+                {lastMutationResult.target_text && (
+                  <div style={{ fontSize: '0.78rem', color: 'var(--text-dim)', marginBottom: '0.4rem' }}>
+                    <strong>Target Passage:</strong> <span style={{ color: '#E2E8F0', fontStyle: 'italic' }}>&ldquo;{lastMutationResult.target_text}&rdquo;</span>
+                  </div>
+                )}
+                <div style={{ fontSize: '0.72rem', color: 'var(--text-dim)' }}>
+                  State diff below represents atomic AST and formatting mutations synchronized to both ONLYOFFICE canvas and disk.
+                </div>
+              </div>
+            )}
 
             {/* Property Mutation Diff Table */}
             {lastMutationResult.state_diff && (

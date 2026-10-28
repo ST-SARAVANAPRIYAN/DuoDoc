@@ -15,7 +15,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from PIL import Image
 
-from config import RENDERS_DIR, DEVICE
+from config import RENDERS_DIR, DEVICE, UPLOAD_DIR
 from schema import UnifiedDocument, DocumentPage, DocumentElement
 from schemas import (
     QARequest,
@@ -1352,6 +1352,19 @@ def run_qa_streaming(req: QARequest):
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
+def _sync_docx_to_disk(document_id: str, doc: UnifiedDocument):
+    """Synchronizes native .docx on disk for ONLYOFFICE and export."""
+    try:
+        from export.docx_exporter import DocxDocumentExporter
+        matched = [f for f in os.listdir(UPLOAD_DIR) if f.startswith(document_id) and f.endswith(".docx")]
+        if matched:
+            target_docx_path = os.path.join(UPLOAD_DIR, matched[0])
+            DocxDocumentExporter.export_to_file(doc, target_docx_path)
+            logger.info(f"Updated native DOCX file on disk: {target_docx_path}")
+    except Exception as exp_err:
+        logger.warning(f"Failed to auto-export DOCX on disk: {exp_err}")
+
+
 @router.post("/manipulate", response_model=ManipulateResponse)
 def run_manipulation(req: ManipulateRequest):
     """
@@ -1582,6 +1595,9 @@ def run_manipulation(req: ManipulateRequest):
     mod_doc_id = f"{req.document_id}_modified"
     store_document(mod_doc_id, mod_doc)
 
+    # Synchronize native .docx on disk for ONLYOFFICE and export
+    _sync_docx_to_disk(req.document_id, mod_doc)
+
     # Extract target element bounding box (composite box if group)
     target_bbox = None
     if req.page_idx < len(mod_doc.pages):
@@ -1595,21 +1611,31 @@ def run_manipulation(req: ManipulateRequest):
                 max(b[3] for b in matched_bboxes)
             ]
 
-    applied_plans = [
-        {
-            "target_id": pred_target_id,
+    applied_plans = []
+    active_targets = target_ids if target_ids else [pred_target_id]
+    for tid in active_targets:
+        t_el = next((e for e in page.elements if e.id == tid), None)
+        applied_plans.append({
+            "target_id": tid,
+            "target_text": t_el.text if t_el else (pred_target_text or target_text),
             "operation": pred_op,
             "property": summary_prop,
             "value": summary_val,
             "updates": updates_payload or {summary_prop: summary_val}
-        }
-    ]
+        })
+
+    state_diff_before = dict(audit.get("before", {}).get("style", {}))
+    state_diff_after = dict(audit.get("after", {}).get("style", {}))
+    if pred_op in ("REPLACE_TEXT", "EDIT_CONTENT"):
+        state_diff_before["text"] = audit.get("before", {}).get("text", "")
+        state_diff_after["text"] = audit.get("after", {}).get("text", "")
 
     return ManipulateResponse(
         document_id=req.document_id,
         page_idx=req.page_idx,
         success=True,
         target_element_id=pred_target_id,
+        target_index=plan.get("target_index") if isinstance(plan, dict) else None,
         target_text=pred_target_text or target_text,
         target_bbox=target_bbox,
         operation=pred_op,
@@ -1619,8 +1645,8 @@ def run_manipulation(req: ManipulateRequest):
         decision=decision,
         reasoning=reasoning,
         state_diff={
-            "before": audit.get("before", {}).get("style", {}),
-            "after": audit.get("after", {}).get("style", {})
+            "before": state_diff_before,
+            "after": state_diff_after
         },
         re_rendered_image_url=rel_url,
         latency_ms=round(latency, 2),
@@ -1662,6 +1688,7 @@ def undo_manipulation(req: CheckpointActionRequest):
 
     store_document(req.document_id, prev_doc)
     store_document(f"{req.document_id}_modified", prev_doc)
+    _sync_docx_to_disk(req.document_id, prev_doc)
 
     return CheckpointActionResponse(
         document_id=req.document_id,
@@ -1704,6 +1731,7 @@ def redo_manipulation(req: CheckpointActionRequest):
 
     store_document(req.document_id, next_doc)
     store_document(f"{req.document_id}_modified", next_doc)
+    _sync_docx_to_disk(req.document_id, next_doc)
 
     return CheckpointActionResponse(
         document_id=req.document_id,

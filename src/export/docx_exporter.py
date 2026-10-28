@@ -7,10 +7,12 @@ native Microsoft Word (.docx) documents preserving styles, alignments, and table
 """
 
 import io
+import re
+from dataclasses import asdict
 from docx import Document
 from docx.shared import Pt, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
-from typing import Optional
+from typing import Optional, List, Dict, Any
 
 from schema import UnifiedDocument, DocumentPage, DocumentElement
 
@@ -60,6 +62,83 @@ class DocxDocumentExporter:
     """
 
     @staticmethod
+    def _apply_run_style(run, style_dict_or_obj):
+        if hasattr(style_dict_or_obj, "bold"):
+            bold = style_dict_or_obj.bold
+            italic = style_dict_or_obj.italic
+            underline = getattr(style_dict_or_obj, "underline", False)
+            strike = getattr(style_dict_or_obj, "strikethrough", False)
+            font_size = getattr(style_dict_or_obj, "font_size", 11)
+            font_family = getattr(style_dict_or_obj, "font_family", None)
+            color = getattr(style_dict_or_obj, "color", None)
+        else:
+            bold = style_dict_or_obj.get("bold")
+            italic = style_dict_or_obj.get("italic")
+            underline = style_dict_or_obj.get("underline")
+            strike = style_dict_or_obj.get("strikethrough") or style_dict_or_obj.get("strike")
+            font_size = style_dict_or_obj.get("font_size")
+            font_family = style_dict_or_obj.get("font_family")
+            color = style_dict_or_obj.get("color")
+
+        if bold is not None:
+            run.bold = bool(bold)
+        if italic is not None:
+            run.italic = bool(italic)
+        if underline is not None:
+            run.underline = bool(underline)
+        if strike is not None:
+            run.font.strike = bool(strike)
+        if font_size:
+            try:
+                run.font.size = Pt(float(font_size))
+            except Exception:
+                pass
+        if font_family and font_family != "Inter":
+            run.font.name = font_family
+        if color:
+            rgb = hex_to_rgb(color)
+            if rgb:
+                run.font.color.rgb = rgb
+
+    @staticmethod
+    def _add_runs_to_paragraph(p, text: str, base_style, spans: Optional[List[Dict[str, Any]]] = None):
+        if not spans:
+            run = p.add_run(text)
+            DocxDocumentExporter._apply_run_style(run, base_style)
+            return
+
+        matches = []
+        for s in spans:
+            stext = s.get("text", "")
+            if not stext:
+                continue
+            for m in re.finditer(re.escape(stext), text, re.IGNORECASE):
+                matches.append((m.start(), m.end(), s.get("style", {})))
+
+        if not matches:
+            run = p.add_run(text)
+            DocxDocumentExporter._apply_run_style(run, base_style)
+            return
+
+        matches.sort(key=lambda x: (x[0], -x[1]))
+        cur_idx = 0
+        for start, end, sstyle in matches:
+            if start < cur_idx:
+                continue
+            if start > cur_idx:
+                r_base = p.add_run(text[cur_idx:start])
+                DocxDocumentExporter._apply_run_style(r_base, base_style)
+            r_span = p.add_run(text[start:end])
+            base_dict = asdict(base_style) if hasattr(base_style, "__dataclass_fields__") else dict(base_style)
+            merged_style = {**base_dict, **sstyle}
+            DocxDocumentExporter._apply_run_style(r_span, merged_style)
+            cur_idx = end
+
+        if cur_idx < len(text):
+            r_tail = p.add_run(text[cur_idx:])
+            DocxDocumentExporter._apply_run_style(r_tail, base_style)
+
+    @staticmethod
     def export_to_stream(doc: UnifiedDocument) -> io.BytesIO:
         """
         Converts the UnifiedDocument into an in-memory BytesIO stream of a .docx file.
@@ -74,6 +153,7 @@ class DocxDocumentExporter:
                     continue
 
                 align_enum = ALIGN_MAPPING.get(style.alignment.lower(), WD_ALIGN_PARAGRAPH.LEFT)
+                spans = elem.metadata.get("spans") if elem.metadata else None
 
                 # Headings
                 if elem.type == "heading":
@@ -84,20 +164,7 @@ class DocxDocumentExporter:
                     if getattr(style, "line_spacing", 1.15) > 0:
                         p.paragraph_format.line_spacing = style.line_spacing
 
-                    run = p.add_run(text)
-                    run.bold = getattr(style, "bold", True)
-                    run.italic = getattr(style, "italic", False)
-                    run.font.size = Pt(style.font_size if style.font_size > 0 else 16)
-                    if getattr(style, "underline", False):
-                        run.underline = True
-                    if getattr(style, "strikethrough", False):
-                        run.font.strike = True
-                    if getattr(style, "font_family", None) and style.font_family != "Inter":
-                        run.font.name = style.font_family
-                    if style.color:
-                        rgb = hex_to_rgb(style.color)
-                        if rgb:
-                            run.font.color.rgb = rgb
+                    DocxDocumentExporter._add_runs_to_paragraph(p, text, style, spans)
 
                 # Table rows (pipe-separated)
                 elif elem.type == "table_row":
@@ -121,19 +188,7 @@ class DocxDocumentExporter:
                     if getattr(style, "line_spacing", 1.15) > 0:
                         p.paragraph_format.line_spacing = style.line_spacing
 
-                    run = p.add_run(text)
-                    run.bold = style.bold
-                    run.italic = style.italic
-                    run.underline = style.underline
-                    if getattr(style, "strikethrough", False):
-                        run.font.strike = True
-                    if getattr(style, "font_family", None) and style.font_family != "Inter":
-                        run.font.name = style.font_family
-                    run.font.size = Pt(style.font_size if style.font_size > 0 else 11)
-                    if style.color:
-                        rgb = hex_to_rgb(style.color)
-                        if rgb:
-                            run.font.color.rgb = rgb
+                    DocxDocumentExporter._add_runs_to_paragraph(p, text, style, spans)
 
         stream = io.BytesIO()
         word_doc.save(stream)

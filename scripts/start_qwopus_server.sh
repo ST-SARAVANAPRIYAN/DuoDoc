@@ -3,7 +3,15 @@
 
 set -e
 
-LLAMA_SERVER_BIN="/home/saravana/llama.cpp-nanbeige/build/bin/llama-server"
+if [ -x "/home/saravana/llama.cpp/build/bin/llama-server" ]; then
+    LLAMA_SERVER_BIN="/home/saravana/llama.cpp/build/bin/llama-server"
+elif [ -x "$HOME/.local/bin/llama-server" ]; then
+    LLAMA_SERVER_BIN="$HOME/.local/bin/llama-server"
+elif command -v llama-server >/dev/null 2>&1; then
+    LLAMA_SERVER_BIN="$(command -v llama-server)"
+else
+    LLAMA_SERVER_BIN="/home/saravana/llama.cpp/build/bin/llama-server"
+fi
 
 # Find Model Path
 MODEL_PATH=""

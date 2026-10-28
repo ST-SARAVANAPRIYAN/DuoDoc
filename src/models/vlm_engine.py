@@ -128,16 +128,69 @@ def extract_intent_directives(instruction: str, elements: Optional[List[Document
                     directives["target_text"] = el.text[match_idx : match_idx + len(cand)]
                     break
 
-    # E. Target ID via semantic keyword / heading match
-    if not collected_target_ids and elements:
-        for kw in ("introduction", "literature survey", "related work", "proposed system", "methodology", "result", "results", "conclusion", "table", "references"):
-            if kw in inst_lower:
+    # E. Form Field & Document Label Grounding (supports single and compound: "name , reg no", "department and topic")
+    label_keywords = [
+        "registration number", "register number", "reg no", "reg_no", "regno",
+        "name", "department", "dept", "topic", "date", "problem statement",
+        "proposed solution", "methodology", "conclusion", "threats to validity"
+    ]
+    if elements:
+        for kw in label_keywords:
+            if re.search(r"\b" + re.escape(kw) + r"\b", inst_lower):
                 for el in elements:
-                    if kw in el.text.lower():
-                        collected_target_ids.append(el.id)
+                    el_lower = el.text.lower()
+                    if kw in el_lower or (kw == "name" and re.search(r"\bname\b", el_lower)):
+                        if el.id not in collected_target_ids:
+                            collected_target_ids.append(el.id)
                         break
-                if collected_target_ids:
+
+    # F. Target ID via semantic keyword / heading match
+    if not collected_target_ids and elements:
+        # Numeric & Ordinal Paragraph Matching (e.g., "paragraph 2", "second paragraph", "para 3")
+        ordinals = {
+            "first": 0, "1st": 0, "second": 1, "2nd": 1, "third": 2, "3rd": 2,
+            "fourth": 3, "4th": 3, "fifth": 4, "5th": 4, "sixth": 5, "6th": 5,
+            "seventh": 6, "7th": 6, "eighth": 7, "8th": 7, "ninth": 8, "9th": 8,
+            "tenth": 9, "10th": 9, "last": -1
+        }
+        para_num_match = re.search(r"\b(?:paragraph|para|section)\s*#?\s*(\d+)\b|\b(\d+)(?:st|nd|rd|th)?\s+(?:paragraph|para|section)\b", inst_lower)
+        if para_num_match:
+            p_num = int(para_num_match.group(1) or para_num_match.group(2))
+            p_idx = max(0, p_num - 1)
+            directives["target_index"] = p_idx
+            directives["target_id"] = f"paragraph_0_{p_idx}"
+            if elements and p_idx < len(elements):
+                directives["target_text"] = elements[p_idx].text
+                collected_target_ids.append(elements[p_idx].id)
+        else:
+            for ord_word, ord_idx in ordinals.items():
+                if re.search(r"\b" + re.escape(ord_word) + r"\s+(?:paragraph|para|section|heading)\b", inst_lower):
+                    if ord_idx == -1 and elements:
+                        ord_idx = len(elements) - 1
+                    directives["target_index"] = ord_idx
+                    directives["target_id"] = f"paragraph_0_{ord_idx}"
+                    if elements and ord_idx < len(elements):
+                        directives["target_text"] = elements[ord_idx].text
+                        collected_target_ids.append(elements[ord_idx].id)
                     break
+
+        if not collected_target_ids:
+            for kw in (
+                "problem statement", "threats to validity", "threat to validity",
+                "ethical consideration", "ethical considerations", "introduction",
+                "literature survey", "related work", "proposed system", "methodology",
+                "result", "results", "conclusion", "table", "references", "evaluation",
+                "discussion", "future scope", "future work"
+            ):
+                if kw in inst_lower:
+                    for idx, el in enumerate(elements):
+                        if kw in el.text.lower():
+                            collected_target_ids.append(el.id)
+                            directives["target_index"] = idx
+                            directives["target_text"] = el.text
+                            break
+                    if collected_target_ids:
+                        break
 
     # Consolidate target IDs
     unique_target_ids = list(dict.fromkeys(collected_target_ids))
@@ -146,20 +199,33 @@ def extract_intent_directives(instruction: str, elements: Optional[List[Document
         directives["target_ids"] = unique_target_ids
         directives["confidence"] = 0.99
 
-        # Check for unquoted phrase match
-        if not directives["target_id"]:
-            stopwords = {"make", "change", "set", "the", "a", "an", "into", "to", "color", "colour", "font", "size", "style", "format", "bold", "italic", "underline"}
-            words = [w for w in re.findall(r"\b[a-zA-Z0-9_\-]+\b", inst_lower) if w not in stopwords and len(w) >= 3]
-            best_el = None
-            best_score = 0
-            for el in elements:
-                t_lower = el.text.lower()
-                score = sum(2 if re.search(r"\b" + re.escape(w) + r"\b", t_lower) else (1 if w in t_lower else 0) for w in words)
-                if score > best_score:
-                    best_score = score
-                    best_el = el
-            if best_el and best_score >= 2:
-                directives["target_id"] = best_el.id
+    # Check for unquoted phrase match if no target ID yet
+    if not directives["target_id"] and elements:
+        stopwords = {
+            "make", "change", "set", "the", "a", "an", "into", "to", "as", "with",
+            "color", "colour", "font", "size", "style", "format", "bold", "italic", "underline",
+            "center", "centre", "left", "right", "justify", "align", "alignment", "alginment", "algined",
+            "yellow", "red", "blue", "green", "emerald", "purple", "white", "black", "orange"
+        }
+        words = [w for w in re.findall(r"\b[a-zA-Z0-9_\-]+\b", inst_lower) if w not in stopwords and len(w) >= 3]
+        best_el = None
+        best_score = 0
+        for el in elements:
+            t_lower = el.text.lower()
+            score = sum(2 if re.search(r"\b" + re.escape(w) + r"\b", t_lower) else (1 if w in t_lower else 0) for w in words)
+            if score > best_score:
+                best_score = score
+                best_el = el
+        if best_el and best_score >= 2:
+            directives["target_id"] = best_el.id
+
+    # Always ensure target_index is populated whenever target_id is resolved
+    if directives["target_id"] and elements:
+        found_idx = next((i for i, e in enumerate(elements) if e.id == directives["target_id"]), None)
+        if found_idx is not None:
+            directives["target_index"] = found_idx
+            if not directives.get("target_text"):
+                directives["target_text"] = elements[found_idx].text
 
     # 2. Font Size
     size_match = re.search(r"(?:font\s*size|size\s*(?:to|of|is)?)\s*(\d+)\b|\b(\d+)\s*(?:pt|px)\b", instruction, re.IGNORECASE)
@@ -192,14 +258,16 @@ def extract_intent_directives(instruction: str, elements: Optional[List[Document
     elif re.search(r"\b(?:strikethrough|strike-through|cross\s*out|strike)\b", instruction, re.IGNORECASE):
         directives["updates"]["strikethrough"] = True
 
-    # 7. Alignment (supports variations and common typos like 'algined')
-    align_match = re.search(
-        r"\b(center|left|right|justify)(?:\s+(?:align(?:ed|ment)?|algined|algned))?\b|\b(?:align(?:ed|ment)?|algined|algned)\s+(?:to\s+)?(center|left|right|justify)\b",
-        instruction,
-        re.IGNORECASE
-    )
-    if align_match:
-        align_val = (align_match.group(1) or align_match.group(2)).lower()
+    # 7. Alignment (supports variations and common typos like 'alginment', 'algined', 'algned')
+    align_val = None
+    for d in ("center", "left", "right", "justify"):
+        if re.search(r"\b" + d + r"\b", inst_lower):
+            align_val = d
+            break
+    if not align_val:
+        if re.search(r"\b(?:align(?:ed|ment)?|algined|algned|aligment|allign(?:ed|ment)?|alginment)\b", inst_lower):
+            align_val = "center"
+    if align_val:
         directives["updates"]["alignment"] = align_val
 
     # 8. Indentation
@@ -276,10 +344,33 @@ def extract_intent_directives(instruction: str, elements: Optional[List[Document
             directives["updates"]["color"] = "#FEF08A"
 
     # 14. Text Replacement
-    rep_match = re.search(r"(?:change|replace|set)\s+(?:text|heading|title|paragraph)?\s*(?:to|with)\s+[\"']([^\"'\n\r]+)[\"']", instruction, re.IGNORECASE)
+    rep_match = re.search(r"(?:change|replace|set)\s+(?:text|heading|title|paragraph)?\s*(?:to|with|into|as)\s+[\"']([^\"'\n\r]+)[\"']", instruction, re.IGNORECASE)
     if rep_match:
         directives["operation"] = "REPLACE_TEXT"
         directives["updates"]["text"] = rep_match.group(1).strip()
+    else:
+        # Flexible replacement pattern: change/replace/set [the] <target_phrase> as/to/with/into <new_value>
+        field_rep = re.search(r"(?:change|replace|set)\s+(?:the\s+)?(.+?)\s+(?:as|to|with|into)\s+[\"']?([^\"'\n\r]+)[\"']?$", instruction, re.IGNORECASE)
+        if field_rep:
+            target_cand = field_rep.group(1).strip().lower()
+            new_val = field_rep.group(2).strip()
+            style_keywords = {"color", "colour", "font", "size", "style", "alignment", "align", "background", "highlight", "italic", "bold"}
+            if not any(k in target_cand for k in style_keywords) and len(new_val) >= 1:
+                if elements:
+                    clean_cand = re.sub(r"[^a-z0-9]", "", target_cand)
+                    for idx, el in enumerate(elements):
+                        clean_el = re.sub(r"[^a-z0-9]", "", el.text.lower())
+                        if clean_cand in clean_el:
+                            directives["target_id"] = el.id
+                            directives["target_index"] = idx
+                            directives["operation"] = "REPLACE_TEXT"
+                            directives["updates"]["text"] = new_val
+                            if ":" in el.text:
+                                parts = el.text.split(":", 1)
+                                directives["target_text"] = parts[1].strip()
+                            else:
+                                directives["target_text"] = el.text.strip()
+                            break
 
     # 15. Subscript & Superscript
     if re.search(r"\b(?:subscript|sub-script)\b", instruction, re.IGNORECASE):
@@ -1486,6 +1577,7 @@ class QwopusVLMClient:
                 "target_id": default_target,
                 "target_ids": directives.get("target_ids"),
                 "target_text": directives.get("target_text"),
+                "target_index": directives.get("target_index"),
                 "operation": directives["operation"],
                 "property": primary_prop,
                 "value": primary_val,
@@ -1572,6 +1664,7 @@ class QwopusVLMClient:
                         "target_id": directives["target_id"] or target_id,
                         "target_ids": directives.get("target_ids"),
                         "target_text": directives.get("target_text"),
+                        "target_index": directives.get("target_index"),
                         "operation": directives.get("operation") or parsed.get("operation", "SET_STYLE"),
                         "property": primary_prop,
                         "value": primary_val,
@@ -1593,6 +1686,7 @@ class QwopusVLMClient:
             "target_id": default_target,
             "target_ids": directives.get("target_ids"),
             "target_text": directives.get("target_text"),
+            "target_index": directives.get("target_index"),
             "operation": directives["operation"],
             "property": primary_prop,
             "value": primary_val,

@@ -132,14 +132,35 @@ class DocumentStateExecutor:
                     _, t_elem = t_found
                     t_elem.style = ElementStyle()
                     t_elem.metadata.pop("spans", None)
-        elif target_text:
-            # Substring / span-level mutation: do not override entire element's base style
+        elif operation == "REPLACE_TEXT":
+            repl_text = str(props_to_apply.get("text", value if value is not None else ""))
             for tid in all_targets:
                 t_found = doc_copy.find_element(tid)
                 if t_found:
                     _, t_elem = t_found
-                    if target_text.lower() in t_elem.text.lower():
-                        # Handle text_case transform on the target substring
+                    if target_text and target_text.lower() in t_elem.text.lower():
+                        pattern = re.compile(re.escape(target_text), re.IGNORECASE)
+                        t_elem.text = pattern.sub(repl_text, t_elem.text, count=1)
+                    else:
+                        t_elem.text = repl_text
+        elif target_text:
+            # Check if target_text covers the entire element or is an isolated substring
+            for tid in all_targets:
+                t_found = doc_copy.find_element(tid)
+                if t_found:
+                    _, t_elem = t_found
+                    clean_target = re.sub(r"\s+", " ", target_text.strip().lower())
+                    clean_elem_text = re.sub(r"\s+", " ", t_elem.text.strip().lower())
+                    is_full_elem = (
+                        clean_target == clean_elem_text or
+                        len(clean_target) >= int(0.80 * len(clean_elem_text)) or
+                        len(clean_elem_text) == 0
+                    )
+
+                    if is_full_elem:
+                        DocumentStateExecutor._apply_props_to_element(t_elem, props_to_apply)
+                    elif clean_target in clean_elem_text:
+                        # Substring / span-level mutation: record in spans metadata and apply
                         curr_target = target_text
                         if "text_case" in props_to_apply:
                             tc = str(props_to_apply["text_case"]).lower()
@@ -159,7 +180,6 @@ class DocumentStateExecutor:
                         if style_updates:
                             if "spans" not in t_elem.metadata:
                                 t_elem.metadata["spans"] = []
-                            # Check if a span for this exact substring already exists
                             existing_span = next(
                                 (s for s in t_elem.metadata["spans"] if s.get("text", "").lower() == curr_target.lower()),
                                 None
@@ -171,6 +191,8 @@ class DocumentStateExecutor:
                                     "text": curr_target,
                                     "style": dict(style_updates)
                                 })
+                    else:
+                        DocumentStateExecutor._apply_props_to_element(t_elem, props_to_apply)
         else:
             for tid in all_targets:
                 t_found = doc_copy.find_element(tid)
@@ -179,6 +201,11 @@ class DocumentStateExecutor:
                     DocumentStateExecutor._apply_props_to_element(t_elem, props_to_apply)
 
         after_state = elem.to_dict()
+        # Guarantee that after_state.style exposes all mutated properties for accurate diffing
+        if props_to_apply and "style" in after_state and isinstance(after_state["style"], dict):
+            for k, v in props_to_apply.items():
+                if k != "text":
+                    after_state["style"][k] = v
 
         summary_prop = property_name if property_name else ", ".join(props_to_apply.keys())
         summary_val = value if value is not None else props_to_apply

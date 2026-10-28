@@ -67,6 +67,10 @@ data/renders/*
 data/mongodb/
 data/db/
 data/local_db.json
+onlyoffice-vers-doudoc/data/local_db.json
+onlyoffice-vers-doudoc/.venv
+onlyoffice-vers-doudoc/models
+onlyoffice-vers-doudoc/uploads
 *.log*
 data/*.log*
 

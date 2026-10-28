@@ -1108,9 +1108,9 @@ pre {
 /* Split Layout */
 .agentic-split-layout {
   display: grid;
-  grid-template-columns: 1.25fr 1fr;
-  gap: 1.25rem;
-  height: calc(100vh - 170px);
+  grid-template-columns: minmax(0, 1.85fr) minmax(380px, 1fr);
+  gap: 1rem;
+  height: calc(100vh - 120px);
   min-height: 640px;
 }
 

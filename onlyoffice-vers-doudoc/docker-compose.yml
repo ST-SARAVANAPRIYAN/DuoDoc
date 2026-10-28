@@ -1,0 +1,15 @@
+version: '3'
+
+services:
+  onlyoffice:
+    image: onlyoffice/documentserver:latest
+    container_name: onlyoffice-document-server
+    ports:
+      - "9000:80"
+    restart: always
+    environment:
+      - JWT_ENABLED=false
+      - JWT_HEADER=Authorization
+      - JWT_SECRET=
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
